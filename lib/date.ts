@@ -74,6 +74,62 @@ export function deadlineHasTime(deadlineStr: string | null | undefined): boolean
   return false;
 }
 
+/**
+ * Parses explicit reminder offset expressions from text.
+ * e.g.:
+ * - "remind me 15 minutes before" -> "15 minutes before"
+ * - "remind me 1 hour before" -> "1 hour before"
+ * - "remind me a day before" -> "1 day before"
+ * - "remind me 3 hours before" -> "3 hours before"
+ * Returns null if no explicit reminder offset is specified.
+ */
+export function parseReminderOffset(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const lower = text.toLowerCase();
+
+  // 15 minutes before / 15 mins before / 15 min before
+  if (
+    /\b(?:remind\s+(?:me\s+)?(?:about\s+it\s+)?)?(?:15|fifteen)\s*(?:minutes?|mins?|m)\s+(?:before|prior|earlier|ahead)\b/i.test(lower) ||
+    /\b(?:15|fifteen)\s*(?:minutes?|mins?|m)\s+reminder\b/i.test(lower)
+  ) {
+    return "15 minutes before";
+  }
+
+  // 1 hour before / an hour before
+  if (
+    /\b(?:remind\s+(?:me\s+)?(?:about\s+it\s+)?)?(?:1|one|an?)\s*(?:hour|hr)s?\s+(?:before|prior|earlier|ahead)\b/i.test(lower) ||
+    /\b(?:1|one|an?)\s*(?:hour|hr)\s+reminder\b/i.test(lower)
+  ) {
+    return "1 hour before";
+  }
+
+  // 3 hours before
+  if (
+    /\b(?:remind\s+(?:me\s+)?(?:about\s+it\s+)?)?(?:3|three)\s*(?:hours|hrs)\s+(?:before|prior|earlier|ahead)\b/i.test(lower) ||
+    /\b(?:3|three)\s*(?:hours|hrs)\s+reminder\b/i.test(lower)
+  ) {
+    return "3 hours before";
+  }
+
+  // 1 day before / a day before
+  if (
+    /\b(?:remind\s+(?:me\s+)?(?:about\s+it\s+)?)?(?:1|one|a)\s*day\s+(?:before|prior|earlier|ahead)\b/i.test(lower) ||
+    /\b(?:1|one|a)\s*day\s+reminder\b/i.test(lower)
+  ) {
+    return "1 day before";
+  }
+
+  // 3 days before
+  if (
+    /\b(?:remind\s+(?:me\s+)?(?:about\s+it\s+)?)?(?:3|three)\s*days?\s+(?:before|prior|earlier|ahead)\b/i.test(lower) ||
+    /\b(?:3|three)\s*days?\s+reminder\b/i.test(lower)
+  ) {
+    return "3 days before";
+  }
+
+  return null;
+}
+
 export function classifyDeadlineToBucket(
   deadlineStr: string | null,
   referenceDate: Date = getAppReferenceDate(),

@@ -1,5 +1,5 @@
 import { extractionSchema, type ExtractionResult, type ExtractedTask, type ExtractedMemory } from "./extraction-schema";
-import { getCurrentDateContext, getCalendarReference } from "../date";
+import { getCurrentDateContext, getCalendarReference, getAppReferenceDate } from "../date";
 
 export class ExtractionError extends Error {
   public readonly originalError?: unknown;
@@ -164,18 +164,23 @@ export function cleanTaskTitle(rawTitle: string, deadline: string | null): strin
   let cleaned = rawTitle.trim();
   cleaned = cleaned.replace(/^(?:please\s+|can\s+you\s+|could\s+you\s+|remind\s+me\s+to\s+|i\s+need\s+to\s+|make\s+sure\s+to\s+|kindly\s+)/i, "");
   cleaned = cleaned.replace(/^share\s+me\s+the\s+/i, "Share the ");
+  cleaned = cleaned.replace(/\s+(?:and\s+)?(?:please\s+)?(?:remind\s+me|set\s+(?:a\s+)?reminder|send\s+(?:a\s+)?reminder)\s+.*$/i, "");
 
   if (deadline) {
-    // 1. Strip inline deadline phrases (e.g. 'call Rahul tomorrow at 5 PM about Basera' -> 'call Rahul about Basera')
-    cleaned = cleaned.replace(/\s+(?:tomorrow|today|tonight|on\s+monday|by\s+monday|on\s+sunday|by\s+sunday|on\s+friday|by\s+friday)(?:\s+(?:at|by)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|p\.m\.|a\.m\.|five\s+pm|5\s+pm)?)?\s+(?=(?:about|regarding|for|with|to)\b)/i, " ");
-
-    // 2. Strip trailing deadline phrases (e.g. 'by Monday at 6 PM.', 'tomorrow at 5 PM', 'due Sunday at 11:59 PM')
     const prep = "(?:by|before|at|on|due\\s+on|due\\s+by|due|until|till|for)";
     const day = "(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)";
     const rel = "(?:today|tomorrow|tmrw|tonight|this\\s+week|next\\s+week|weekend)";
-    const time = "(?:\\d{1,2}(?::\\d{2})?\\s*(?:am|pm|a\\.m\\.|p\\.m\\.)|\\d{1,2}:\\d{2}|noon|midnight)";
+    const time = "(?:\\d{1,2}(?::\\d{2})?\\s*(?:am|pm|a\\.m\\.|p\\.m\\.)|\\d{1,2}:\\d{2}|noon|midnight|five\\s+pm|5\\s+pm)";
     const date = "(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\s+\\d{1,2}(?:st|nd|rd|th)?|\\d{1,2}(?:st|nd|rd|th)?\\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*)";
 
+    // 1. Strip inline deadline phrases before topic prepositions (e.g. 'call Rahul tomorrow at 5 PM about Basera' -> 'call Rahul about Basera')
+    const inlinePattern = new RegExp(
+      "\\s+(?:" + prep + "\\s+)?(?:" + day + "|" + rel + "|" + date + "|" + time + ")(?:\\s+(?:" + prep + "|at|by|on|around)?\\s*(?:" + time + "|" + day + "|" + rel + "|" + date + "|sharp|morning|afternoon|evening|night|eod))*\\s+(?=(?:about|regarding|for|with|to)\\b)",
+      "i"
+    );
+    cleaned = cleaned.replace(inlinePattern, " ");
+
+    // 2. Strip trailing deadline phrases (e.g. 'by Monday at 6 PM.', 'tomorrow at 5 PM', 'due Sunday at 11:59 PM')
     const trailingPattern = new RegExp(
       "\\s+(?:" + prep + "\\s+)?(?:" + day + "|" + rel + "|" + date + "|" + time + ")(?:\\s+(?:" + prep + "|at|by|on|around)?\\s*(?:" + time + "|" + day + "|" + rel + "|" + date + "|sharp|morning|afternoon|evening|night|eod))*[^a-zA-Z0-9]*$",
       "i"
@@ -183,6 +188,7 @@ export function cleanTaskTitle(rawTitle: string, deadline: string | null): strin
     cleaned = cleaned.replace(trailingPattern, "");
   }
 
+  cleaned = cleaned.replace(/\s{2,}/g, " ");
   cleaned = cleaned.replace(/[.,:;!]+$/, "").trim();
   if (cleaned.length > 0) {
     cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
@@ -237,6 +243,23 @@ function sanitizeAndValidateResult(
       const isTomorrow = /\b(tomorrow|tmrw)\b/i.test(evidence) || /\b(tomorrow|tmrw)\b/i.test(normalizedContent);
       if ((isTonight || isToday) && !isTomorrow) {
         deadline = getCurrentDateContext().currentDate;
+      } else if (isTomorrow) {
+        const refDate = getAppReferenceDate();
+        const tomorrowDate = new Date(refDate.getTime() + 24 * 60 * 60 * 1000);
+        const y = tomorrowDate.getFullYear();
+        const m = String(tomorrowDate.getMonth() + 1).padStart(2, "0");
+        const d = String(tomorrowDate.getDate()).padStart(2, "0");
+        const timeMatch = /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i.exec(evidence + " " + normalizedContent);
+        if (timeMatch) {
+          let hours = parseInt(timeMatch[1], 10);
+          const minutes = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+          const meridian = timeMatch[3].toLowerCase();
+          if (meridian === "pm" && hours < 12) hours += 12;
+          if (meridian === "am" && hours === 12) hours = 0;
+          deadline = `${y}-${m}-${d}T${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:00+05:30`;
+        } else {
+          deadline = `${y}-${m}-${d}`;
+        }
       }
     }
 
@@ -270,7 +293,30 @@ function sanitizeAndValidateResult(
     }
 
     // Reject schema artifact names and type labels erroneously generated as task titles
-    if (/^(person|context|deadline|memory|task|reminder|event|document|metadata|note|status)$/i.test(rawTitle)) {
+    if (/^(person|context|deadline|memory|memories|task|tasks|reminder|reminders|priority|output|event|document|metadata|note|status)$/i.test(rawTitle)) {
+      continue;
+    }
+
+    // Reject reminder timing instructions or requests from becoming standalone tasks
+    // (e.g. "Remind me 15 minutes before", "Set a reminder 1 hour before", "Remind me a day before")
+    const isReminderTimingInstruction =
+      /^(?:remind\s+me|set\s+(?:a\s+)?reminder|send\s+(?:a\s+)?reminder)\b.*\b(?:before|prior|earlier|ahead)\b/i.test(rawTitle) ||
+      /^(?:remind\s+me|reminder)\s+(?:to\s+remind\s+me\s+)?(?:\d+|a|an|one|two|three)\s+(?:minutes?|hours?|days?|mins?|hrs?)\s+(?:before|prior|earlier|ahead)?$/i.test(rawTitle);
+    if (isReminderTimingInstruction) {
+      continue;
+    }
+
+    // Reject meta instructions hallucinated as tasks (e.g. "Extract memories", "Extract tasks", "Extract person memories")
+    if (/^(extract|summarize|identify|parse)\b/i.test(rawTitle)) {
+      continue;
+    }
+
+    // Reject legal definition statements and terms from becoming tasks
+    if (
+      /^(?:confidential\s+information|work\s+product|intellectual\s+property|proprietary\s+information)\b/i.test(rawTitle) ||
+      (/\b(?:confidential\s+information|work\s+product|intellectual\s+property|proprietary\s+information)\s+(?:means|includes|shall\s+mean|shall\s+include)\b/i.test(evidence) &&
+       !/\b(please|kindly|i\s+need\s+to|i\s+have\s+to|make\s+sure\s+to|remind\s+me\s+to|don'?t\s+forget\s+to|call|ask|tell|send|submit)\b/i.test(evidence))
+    ) {
       continue;
     }
 
@@ -322,6 +368,14 @@ function sanitizeAndValidateResult(
       continue;
     }
 
+    // Reject certificate / letter of recommendation / completion provision clauses
+    const isCompletionProvisionTask =
+      /^(send|provide|issue|give|grant)\s+(an?\s+)?(internship\s+)?(completion\s+certificate|certificate\s+of\s+completion|letter\s+of\s+recommendation|lor)\b/i.test(rawTitle) ||
+      /\b(completion\s+certificate|certificate\s+of\s+completion|letter\s+of\s+recommendation)\b/i.test(rawTitle);
+    if (isCompletionProvisionTask) {
+      continue;
+    }
+
     // Reject issuer/metadata hallucinations (e.g. "Send offer letter to X" when the document itself is that offer letter)
     const isIssuerOrMetadataTask = /^(send|issue|provide)\s+(an?\s+)?(offer\s+letter|appointment\s+letter|contract|agreement)\s+to\b/i.test(rawTitle);
     if (isIssuerOrMetadataTask) {
@@ -331,10 +385,23 @@ function sanitizeAndValidateResult(
       }
     }
 
-    // Reject casual social pleasantries, greetings, and sign-offs
-    const isCasualSocial = /^(let'?s\s+)?(catch\s+up|meet\s+up|hang\s+out|talk\s+soon|see\s+you|have\s+fun|take\s+care)(\s+(?:tomorrow|later|soon|then|sometime|again))?$/i.test(rawTitle) ||
-      /\b(let'?s\s+catch\s+up|talk\s+soon|see\s+you\s+(later|tomorrow|soon)|have\s+fun|take\s+care)\b/i.test(rawTitle);
+    // Reject casual social pleasantries, greetings, sign-offs, and informal conversational plans
+    const isCasualSocial =
+      /^(?:let'?s\s+)?(?:catch\s+up|meet\s+up|hang\s+out|talk\s+soon|see\s+you|have\s+fun|take\s+care)(?:\s+(?:with\s+[A-Za-z]+|tomorrow|later|soon|then|sometime|again))*$/i.test(rawTitle) ||
+      /\b(?:let'?s\s+catch\s+up|catch\s+up\s+with|talk\s+soon|see\s+you\s+(?:later|tomorrow|soon)|have\s+fun|take\s+care)\b/i.test(rawTitle) ||
+      (/\b(?:are\s+you\s+free|if\s+you('re|\s+are)\s+free|want\s+to\s+(meet|catch\s+up|hang\s+out|chat)|let'?s\s+catch\s+up)\b/i.test(evidence + " " + normalizedContent) &&
+       /\b(discuss|catch\s+up|meet|talk|chat)\b/i.test(rawTitle) &&
+       !/\b(please|kindly|i\s+need\s+to|i\s+have\s+to|make\s+sure\s+to|remind\s+me\s+to|don'?t\s+forget\s+to|assigned|required|must|due)\b/i.test(evidence + " " + normalizedContent));
     if (isCasualSocial) {
+      continue;
+    }
+
+    // Reject third-party excuses or other chat participants' personal statements in multi-speaker chat
+    // (e.g., "Priya: No, I have to pick up my sister from the airport" -> another participant's reason for declining)
+    const isOtherSpeakerPersonalStatement =
+      /^[A-Z][a-z]+:\s*(?:no,?\s*)?(?:i\s+(?:have\s+to|need\s+to|am\s+going\s+to|will|must)\b|i'?m\s+(?:going\s+to|busy|heading))\b/i.test(evidence.trim()) ||
+      /^[A-Z][a-z]+:\s*(?:no,?\s*)?(?:i\s+(?:have\s+to|need\s+to|am\s+going\s+to|will|must)\b|i'?m\s+(?:going\s+to|busy|heading))\b/i.test(rawTitle.trim());
+    if (isOtherSpeakerPersonalStatement) {
       continue;
     }
 
@@ -343,7 +410,35 @@ function sanitizeAndValidateResult(
       continue;
     }
 
-    const title = cleanTaskTitle(rawTitle, deadline);
+    // Reject synthetic hire/onboarding tasks where action was not explicitly requested in text
+    const isSyntheticHire = /^(hire|recruit|onboard|employ)\b/i.test(rawTitle);
+    if (isSyntheticHire) {
+      const explicitHireInText = /\b(hire|hiring|recruit|recruiting|onboard|onboarding|employ)\b/i.test(evidence) || /\b(hire|hiring|recruit|recruiting|onboard|onboarding|employ)\b/i.test(normalizedContent);
+      if (!explicitHireInText) {
+        continue;
+      }
+    }
+
+    // Reject third-person role, responsibility, or joining statements (e.g. "Rahul handles the Basera landing page", "Anshika is handling the design", "Leena Chawla is joining Basera...")
+    const isThirdPersonRoleStatement =
+      /^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+(?:is\s+)?(?:handling|handles|responsible\s+for|leads|leading|oversees|manages|works\s+on|working\s+on|joining|joined|appointed)\b/i.test(evidence.trim()) ||
+      /^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+(?:is\s+)?(?:handling|handles|responsible\s+for|leads|leading|oversees|manages|works\s+on|working\s+on|joining|joined|appointed)\b/i.test(originalContent.trim());
+    const evidenceHasActionCue = /\b(please|kindly|i\s+need\s+to|i\s+have\s+to|make\s+sure\s+to|remind\s+me\s+to|don'?t\s+forget\s+to|call|ask|tell|email|ping|check\s+with)\b/i.test(evidence);
+    if (isThirdPersonRoleStatement && !evidenceHasActionCue) {
+      continue;
+    }
+
+    let titleToClean = rawTitle;
+    const bareActionRegex = /^(call|calling|phone|ask|asking|email|talk\s+to|speak\s+with|ping|message)\s+([A-Z][a-z]+)$/i;
+    if (bareActionRegex.test(rawTitle.trim())) {
+      const topicMatch = /\b(about|regarding)\s+([^.?!;\n]+)/i.exec(evidence);
+      if (topicMatch) {
+        const topic = topicMatch[0].trim().replace(/[.,:;!]+$/, "");
+        titleToClean = `${rawTitle.trim()} ${topic}`;
+      }
+    }
+
+    const title = cleanTaskTitle(titleToClean, deadline);
 
     let priority: "low" | "medium" | "high" = "medium";
     const evLower = evidence.toLowerCase();
@@ -396,6 +491,14 @@ function sanitizeAndValidateResult(
       continue;
     }
 
+    // Filter out reminder timing instructions from becoming memories
+    if (
+      /^(?:remind\s+me|set\s+(?:a\s+)?reminder|send\s+(?:a\s+)?reminder)\b.*\b(?:before|prior|earlier|ahead)\b/i.test(titleLower) ||
+      /^(?:remind\s+me|reminder)\s+(?:to\s+remind\s+me\s+)?(?:\d+|a|an|one|two|three)\s+(?:minutes?|hours?|days?|mins?|hrs?)\s+(?:before|prior|earlier|ahead)?$/i.test(titleLower)
+    ) {
+      continue;
+    }
+
     // 2. Filter out generic transient phrases or filler
     const TRANSIENT_PHRASES = /^(things are (a bit )?messy(\s+right\s+now)?|weather is nice|you don'?t want to forget|have fun( guys)?|okay cool|i'?m busy(\s+today)?|that meeting was great)$/i;
     if (TRANSIENT_PHRASES.test(titleLower) || TRANSIENT_PHRASES.test(contentLower)) {
@@ -408,10 +511,73 @@ function sanitizeAndValidateResult(
       continue;
     }
 
+    // Filter out formal-document boilerplate, legal definitions, section headings, and policy clauses:
+    // (e.g., Confidential Information, Work Product, Intellectual Property, NDA terms, Completion & Recognition,
+    // boilerplate team responsibilities, and generic definition statements)
+    const LEGAL_OR_BOILERPLATE_TITLE =
+      /^(?:confidential\s+information|confidential\s+material|work\s+product|intellectual\s+property|proprietary\s+information|trade\s+secrets?|non-disclosure|nda|terms\s*(?:and|&)\s*conditions|terms\s+of\s+service|terms\s+of\s+(?:the\s+)?internship|privacy\s+policy|completion\s*(?:and|&)\s*recognition|recognition|recognition\s*(?:and|&)\s*completion|termination\s*(?:clause|policy)?|governing\s+law|jurisdiction|severability|indemnification|limitation\s+of\s+liability|disclaimer|warranties|code\s+of\s+conduct|responsibilities|roles?\s*(?:and|&)\s*responsibilities|scope\s+of\s+work|working\s+hours|work\s+mode|compensation|stipend|general\s+provisions)$/i;
+
+    if (LEGAL_OR_BOILERPLATE_TITLE.test(titleLower) || LEGAL_OR_BOILERPLATE_TITLE.test(contentLower)) {
+      continue;
+    }
+
+    if (/\b(?:confidential\s+material|confidential\s+information|internal\s+information|unpublished\s+campaigns|trade\s+secrets|work\s+product)\b/i.test(titleLower)) {
+      continue;
+    }
+
+    // Filter out document metadata, work mode, working hours, and compensation policy terms
+    const isDocMetadataOrPolicy =
+      /\b(?:work\s+mode|working\s+hours|compensation|stipend|date\s+of\s+issue|offer\s+letter\s+id)\b/i.test(titleLower) ||
+      /\b(?:work\s+mode|working\s+hours|compensation|stipend|date\s+of\s+issue|offer\s+letter\s+id)\b/i.test(contentLower);
+
+    if (isDocMetadataOrPolicy) {
+      continue;
+    }
+
+    // Filter out legal/contractual definition statements (e.g. "X means...", "X includes...", "means internal documents...")
+    const isLegalDefinition =
+      /^(?:means|includes|refers\s+to|shall\s+mean|shall\s+include|is\s+defined\s+as)\s+/i.test(contentLower) ||
+      /\b(?:confidential\s+information|work\s+product|intellectual\s+property|proprietary\s+information)\s+(?:means|includes|shall\s+mean|shall\s+include|is\s+defined\s+as)\b/i.test(contentLower) ||
+      /\b(?:confidential\s+information|work\s+product|intellectual\s+property|proprietary\s+information)\s+(?:means|includes|shall\s+mean|shall\s+include|is\s+defined\s+as)\b/i.test(evidence.toLowerCase()) ||
+      (/\b(?:non-public\s+materials|internal\s+documents|trade\s+secrets|work\s+made\s+for\s+hire|sole\s+and\s+exclusive\s+property)\b/i.test(contentLower) &&
+       /\b(means|includes|credentials|non-public|designs,\s+copies|created\s+for)\b/i.test(contentLower));
+
+    if (isLegalDefinition) {
+      continue;
+    }
+
+    // Filter out boilerplate certificate/recognition/internship-completion clauses
+    const isCompletionBoilerplate =
+      /\b(?:upon\s+successful\s+completion|certificate\s+of\s+completion|internship\s+completion\s+certificate|letter\s+of\s+recommendation|lor\s+will\s+be\s+provided|eligible\s+for\s+a\s+certificate|completion\s*(?:and|&)\s*recognition)\b/i.test(contentLower) ||
+      /\b(?:upon\s+successful\s+completion|certificate\s+of\s+completion|internship\s+completion\s+certificate|letter\s+of\s+recommendation|completion\s*(?:and|&)\s*recognition)\b/i.test(titleLower) ||
+      /\b(?:upon\s+successful\s+completion|certificate\s+of\s+completion|letter\s+of\s+recommendation|completion\s*(?:and|&)\s*recognition)\b/i.test(evidence.toLowerCase());
+
+    if (isCompletionBoilerplate) {
+      continue;
+    }
+
+    // Filter out generic team responsibility descriptions from becoming memories
+    // e.g. "Basera Core Team - Assigning social media activities..."
+    const isGenericTeamResponsibility =
+      /\b(?:core\s+team|the\s+team|company\s+management)\b/i.test(titleLower) &&
+      /\b(?:assigning|assigns|overseeing|supervising|managing|guiding|directing)\b/i.test(contentLower);
+
+    const isGenericActivityOrDuty =
+      /\b(?:social\s+media\s+activities|internship\s+activities|assigned\s+activities|day-to-day\s+tasks|general\s+responsibilities)\b/i.test(titleLower) ||
+      /\b(?:content\s+planning|campaign\s+support|assigned\s+by\s+the\s+core\s+team)\b/i.test(contentLower);
+
+    if (isGenericTeamResponsibility || isGenericActivityOrDuty) {
+      continue;
+    }
+
     // 3. For context memories, ensure title/content provide meaningful context rather than trivial fragments or hallucinations
     if (mem.type === "context") {
       if (title.length < 3 || content.length < 3) continue;
       if (/^(screenshot|note|message|things|weather|chat|text)$/i.test(titleLower)) {
+        continue;
+      }
+      // Organization / company name itself or generic intern duplicate is not a context memory
+      if (/\b(?:intern|internship|management\s+intern)\b/i.test(contentLower)) {
         continue;
       }
       // Ensure key words of content actually appear in original text (prevents prompt hallucination leakage)
@@ -424,12 +590,24 @@ function sanitizeAndValidateResult(
 
     // 4. For deadline memories, ensure there is an actual date reference
     if (mem.type === "deadline") {
+      if (
+        /\b(?:date\s+of\s+issue|issue\s+date|issued\s+on|date\s+of\s+joining|joining\s+date|start\s+date|duration|internship\s+duration)\b/i.test(titleLower) ||
+        /\b(?:date\s+of\s+issue|issue\s+date|issued\s+on|date\s+of\s+joining|joining\s+date|start\s+date|duration|internship\s+duration)\b/i.test(contentLower) ||
+        /\b(?:date\s+of\s+issue|issue\s+date|issued\s+on)\b/i.test(evidence.toLowerCase())
+      ) {
+        continue;
+      }
       if (!hasDateReference(content) && !hasDateReference(evidence) && !hasClockTime(content)) {
         continue;
       }
     }
 
     if (mem.type === "person") {
+      // Teams, departments, committees, organizations, companies are not individual persons
+      if (/\b(team|committee|department|board|management|company|organization|foundation|council)\b/i.test(titleLower)) {
+        continue;
+      }
+
       // If person title contains role like "Akshay DU operations", separate name
       const parts = title.split(/\s+/);
       if (parts.length >= 2 && /DU|operations|tech|social|lead|manager|head|engineer|marketing/i.test(title)) {
@@ -441,6 +619,13 @@ function sanitizeAndValidateResult(
         continue;
       }
 
+      // Ensure key words of content actually appear in original text (prevents prompt hallucination leakage)
+      const contentWords = content.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+      const someWordsInText = contentWords.length === 0 || contentWords.some((w) => normalizedContent.includes(w));
+      if (!someWordsInText) {
+        continue;
+      }
+
       // Filter out conversational greetings, slang, and non-durable filler content
       const CASUAL_PERSON_CONTENT = /^(bro|dude|man|hey|hello|hi|bye|chilling|just chilling|nothing much|okay cool|cool|see you( tomorrow)?|have fun( guys)?|talking|chatting|friend|participant|speaker|sender|mentioned|said)$/i;
       if (CASUAL_PERSON_CONTENT.test(contentLower) || CASUAL_PERSON_CONTENT.test(titleLower)) {
@@ -448,7 +633,14 @@ function sanitizeAndValidateResult(
       }
 
       const CASUAL_PHRASES = /^(what are you doing|doing nothing|nothing much|just chilling|see you( tomorrow| later| soon)?|okay cool|have fun( guys)?|are we meeting|how are you|talk soon)$/i;
-      if (CASUAL_PHRASES.test(contentLower) || contentLower.startsWith("bro ") || contentLower === "bro") {
+      if (
+        CASUAL_PHRASES.test(contentLower) ||
+        contentLower.startsWith("bro ") ||
+        contentLower === "bro" ||
+        /\b(are\s+you\s+free|free\s+(tomorrow|today|tonight|later|this week)|let'?s\s+catch\s+up|want\s+to\s+meet)\b/i.test(contentLower) ||
+        (/\b(are\s+you\s+free|let'?s\s+catch\s+up)\b/i.test(evidence.toLowerCase()) &&
+         !/\b(lead|manager|head|engineer|developer|designer|professor|prof|teacher|team|legal|backend|frontend|design|marketing|operations|ops|handling|responsible|handles|prefers|preference)\b/i.test(contentLower))
+      ) {
         continue;
       }
 
@@ -463,6 +655,32 @@ function sanitizeAndValidateResult(
           continue;
         }
       }
+
+      // Relational mentions guard:
+      // A person mentioned in a relational action (e.g. "call Rahul about X", "ask Rahul about X", "send X to Rahul", "discuss X with Rahul")
+      // is an interlocutor/contact, but does not establish that the person owns, handles, or is responsible for X.
+      const nameEsc = escapeRegExp(title);
+      const isRelationalMention =
+        new RegExp(
+          `\\b(?:call|calling|phone|phoning|ring|ask|asking|send|sending|email|emailing|ping|pinging|message|messaging|text|texting|talk\\s+to|talking\\s+to|meet|meeting|meet\\s+with|meeting\\s+with|speak\\s+to|speaking\\s+to|speak\\s+with|speaking\\s+with|check\\s+with|checking\\s+with|reach\\s+out\\s+to|reaching\\s+out\\s+to|follow\\s+up\\s+with|following\\s+up\\s+with)\\s+(?:[^.?!;\\n]*?\\s+)?\\b${nameEsc}\\b`,
+          "i"
+        ).test(normalizedContent) ||
+        new RegExp(
+          `\\b(?:discuss|discussing|share|sharing|send|sending|review|reviewing)\\b[^.?!;\\n]*?\\b(?:with|to)\\s+\\b${nameEsc}\\b`,
+          "i"
+        ).test(normalizedContent);
+
+      if (isRelationalMention) {
+        const hasExplicitRoleInSource =
+          new RegExp(`\\b${nameEsc}\\b\\s+(?:is\\s+)?(?:handling|handles|responsible\\s+for|leads|leading|head\\s+of|manager\\s+of|in\\s+charge\\s+of|works\\s+on|working\\s+on|owns|owner\\s+of|prefers|preference|submitted|created|designed|built)\\b`, "i").test(normalizedContent) ||
+          new RegExp(`\\b${nameEsc}\\b\\s*,\\s*(?:the\\s+)?(?:lead|manager|head|designer|developer|engineer|founder|flatmate|client|doctor|prof|professor)\\b`, "i").test(normalizedContent) ||
+          new RegExp(`\\b(?:the\\s+)?(?:lead|manager|head|designer|developer|engineer|founder|flatmate|client|doctor|prof|professor)\\s+\\b${nameEsc}\\b`, "i").test(normalizedContent) ||
+          new RegExp(`\\b(?:asked|assigned|told|requested)\\s+\\b${nameEsc}\\b\\s+to\\s+\\w+`, "i").test(normalizedContent);
+
+        if (!hasExplicitRoleInSource) {
+          continue;
+        }
+      }
     }
 
     memories.push({
@@ -471,6 +689,22 @@ function sanitizeAndValidateResult(
       content,
       evidence,
     });
+  }
+
+  // Signatory block recovery for formal letters and agreements
+  const signatoryMatch = /(?:^|\n)([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\r?\n([A-Z][A-Za-z\s&]+(?:,\s*[A-Za-z0-9\s]+)?)\r?\n(?:New Delhi|Delhi|Mumbai|Bangalore|[A-Z][a-z]+|[a-z0-9._%+-]+@)/m.exec(originalContent);
+  if (signatoryMatch) {
+    const sigName = signatoryMatch[1].trim();
+    const sigRole = signatoryMatch[2].trim();
+    const alreadyHas = memories.some((m) => m.type === "person" && m.title.toLowerCase().includes(sigName.toLowerCase()));
+    if (!alreadyHas && sigName.split(/\s+/).length >= 2 && /(?:founder|ceo|director|partner|head|manager|lead|president|officer)/i.test(sigRole)) {
+      memories.push({
+        type: "person",
+        title: sigName,
+        content: sigRole,
+        evidence: signatoryMatch[0].slice(0, 120),
+      });
+    }
   }
 
   const mergedTasks = mergeCoordinatedTasks(tasks, originalContent);
@@ -496,6 +730,33 @@ function normalizeResult(parsed: unknown, originalContent: string): unknown {
     : Array.isArray(obj.memory)
       ? obj.memory
       : [];
+
+  // Recover person/role memories if Gemma misclassified them into tasks array with schema labels
+  if (memories.length === 0 && tasks.length > 0) {
+    const personTask = tasks.find(
+      (t) => typeof t === "object" && t !== null && /^(person)$/i.test(String((t as Record<string, unknown>).title || "").trim())
+    ) as Record<string, unknown> | undefined;
+
+    if (personTask) {
+      const personName = typeof personTask.deadline === "string" ? personTask.deadline.trim() : "";
+      if (personName && !/^\d{4}-\d{2}-\d{2}/.test(personName)) {
+        const roleTask = tasks.find(
+          (t) => typeof t === "object" && t !== null && /^(context)$/i.test(String((t as Record<string, unknown>).title || "").trim()) &&
+                 typeof (t as Record<string, unknown>).deadline === "string" && /(intern|manager|lead|developer|engineer|designer|director|analyst|coordinator)/i.test(String((t as Record<string, unknown>).deadline))
+        ) as Record<string, unknown> | undefined;
+
+        const role = roleTask ? String(roleTask.deadline || "").trim() : "";
+        if (role) {
+          memories.push({
+            type: "person",
+            title: personName,
+            content: role,
+            evidence: String(roleTask?.evidence || personTask.evidence || originalContent.slice(0, 120)),
+          });
+        }
+      }
+    }
+  }
 
   const seenTitles = new Set<string>();
   const normalizedTasks: Array<{
@@ -664,13 +925,16 @@ Strict Rules:
      * "The project is almost complete" -> NOT a task (statement of fact).
      * "Had a great discussion with the team today" -> NOT a task (conversational note).
    - Documents, Contracts, Offer Letters, Policies & Informational Text:
+     * SCHEMA LABELS FORBIDDEN: NEVER use "Person", "Context", "Deadline", "Task", "Memory", "Output", "Metadata", "Status" as a task title.
      * A document statement becomes a task ONLY when it represents a concrete actionable item that the user is explicitly expected/requested to perform or deliver (e.g., "Please send the signed offer letter by Friday" -> 1 task; "Submit your signed acceptance form by Friday" -> 1 task; "Complete the onboarding form by Monday" -> 1 task).
      * NEVER create tasks from generic document responsibilities or ongoing expectations (e.g. "Complete assigned work within mutually agreed timelines", "Actively participate in assigned tasks", "Maintain professionalism", "Maintain reasonable consistency and availability", "Inform the team in advance"). Return "tasks": [].
      * NEVER create tasks from company policies, codes of conduct, or compliance rules (e.g. "Follow Basera's internal guidelines and instructions"). Return "tasks": [].
      * NEVER create tasks from confidentiality clauses, NDA terms, IP rules, or data protection terms (e.g. "Keep such information confidential", "Do not share confidential information", "Not retain or misuse confidential information"). Return "tasks": [].
      * NEVER create tasks from document metadata, issue dates, or headers (e.g. "Date of Issue: 30 September 2026", "Offer Letter ID: BSR/INT/2026/003"). Do NOT invent tasks like "Send offer letter to X". Return "tasks": [].
+     * NEVER create tasks from perks, benefits, completion certificates, or letters of recommendation that the company/organization will provide in the future (e.g. "provide: Internship Completion Certificate", "Letter of Recommendation (LOR)"). Return "tasks": [].
      * NEVER turn contract, internship, or program duration dates into tasks (e.g. "Duration 1 October 2026 - 30 November 2026", "Your internship runs from Oct 1 to Nov 30"). Duration dates are descriptive information, NOT tasks or task deadlines. Do NOT create tasks like "Start internship" or "Complete internship". Return "tasks": [].
      * NEVER turn boilerplate acceptance statements or signature blocks into tasks (e.g. "By accepting this offer, you acknowledge..."). Return "tasks": [].
+     * Document appointments, roles, positions, and signatories are NOT tasks. They belong in "memories".
    - If uncertain whether something is an actionable task, DO NOT create a task. Return "tasks": [].
 
 3. Deadlines (NEVER FABRICATE TIME):
@@ -698,6 +962,11 @@ Strict Rules:
        - "Anshika is handling the design." -> Person: "Anshika", Content: "Handling the design"
        - "Professor asked Rahul to submit the report." -> Person: "Rahul", Content: "Asked to submit the report" (task relationship)
        - "Vikram mentioned he prefers email over Slack for formal approvals." -> Person: "Vikram", Content: "Prefers email over Slack for formal approvals" (durable preference)
+     * Formal Documents, Contracts & Offer Letters:
+       - Extract person roles, appointments, or titles as "person" memories:
+         * Recipient / Appointee: Person: "Full Name", Content: "Designated Role/Position at Organization" (e.g., Person: "Name", Content: "Role")
+         * Authorized Signatory / Executive: Person: "Full Name", Content: "Role/Title, Organization"
+       - Legal clauses, NDA definitions (e.g., "Confidential Information means..."), IP terms, and boilerplate recognition clauses are NOT memories. Return 0 memories for them.
      * Invalid person memories (MUST return 0 memories):
        - "Rohan: Bro what are you doing? Ankit: Nothing much, just chilling. Priya: Okay cool, see you tomorrow." -> 0 memories.
        - "Rahul: Hey bro" -> 0 memories.
@@ -796,15 +1065,15 @@ Strict Rules:
     throw new ExtractionError("AI returned invalid JSON output.", err);
   }
 
-  const initialValidation = extractionSchema.safeParse(parsed);
-  if (initialValidation.success) {
-    return sanitizeAndValidateResult(initialValidation.data, content);
-  }
-
   const normalized = normalizeResult(parsed, content);
   const normalizedValidation = extractionSchema.safeParse(normalized);
   if (normalizedValidation.success) {
     return sanitizeAndValidateResult(normalizedValidation.data, content);
+  }
+
+  const initialValidation = extractionSchema.safeParse(parsed);
+  if (initialValidation.success) {
+    return sanitizeAndValidateResult(initialValidation.data, content);
   }
 
   throw new ExtractionError("Extracted data did not meet required format.");

@@ -1,7 +1,6 @@
 // Use Node's native require to bypass Webpack bundling of pdf-parse / pdfjs-dist
 // which fails in Next.js Server Components with "TypeError: Object.defineProperty called on non-object"
 function getPDFParseClass() {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const nodeRequire = eval("require");
   const pdfParseModule = nodeRequire("pdf-parse");
   return pdfParseModule.PDFParse || pdfParseModule.default || pdfParseModule;

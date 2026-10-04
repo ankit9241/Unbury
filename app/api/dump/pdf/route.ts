@@ -3,6 +3,8 @@ import { processDump } from "@/lib/pipeline";
 import { extractTextFromPdf } from "@/lib/pdf";
 import { createSource, updateSourceStatus } from "@/lib/db/sources";
 
+export const dynamic = "force-dynamic";
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();

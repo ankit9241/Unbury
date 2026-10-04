@@ -7,7 +7,7 @@ import { scheduleReminderForTask } from "./db/reminders";
 import { findMatchingTask, deadlinesDiffer, createConflict, type ConflictDocument } from "./db/conflicts";
 import { extractFromText, cleanTaskTitle } from "./ai/gemma";
 import type { ExtractedTask, ExtractedMemory } from "./ai/extraction-schema";
-import { classifyDeadlineToBucket, deadlineHasTime } from "./date";
+import { classifyDeadlineToBucket, deadlineHasTime, parseReminderOffset } from "./date";
 import type { Bucket, Dump, Priority, Reminder, Task } from "./data";
 import type { MappedMemory } from "./db/memories";
 
@@ -115,7 +115,22 @@ export async function processDump(options: ProcessDumpOptions): Promise<ProcessD
 
       const hasDeadline = Boolean(t.deadline);
       const hasTime = deadlineHasTime(t.deadline);
-      const suggestedReminder = hasDeadline && hasTime ? "3 hours before" : null;
+
+      let explicitOffset = parseReminderOffset(t.evidence);
+      if (!explicitOffset && extraction.tasks.length === 1) {
+        explicitOffset = parseReminderOffset(content);
+      } else if (!explicitOffset) {
+        const sentences = content.split(/[.?!;\n]+/).map((s) => s.trim()).filter(Boolean);
+        const evLower = t.evidence.toLowerCase();
+        const sentenceIdx = sentences.findIndex((s) => s.toLowerCase().includes(evLower) || evLower.includes(s.toLowerCase()));
+        if (sentenceIdx !== -1) {
+          explicitOffset =
+            parseReminderOffset(sentences[sentenceIdx]) ||
+            (sentenceIdx + 1 < sentences.length ? parseReminderOffset(sentences[sentenceIdx + 1]) : null);
+        }
+      }
+
+      const suggestedReminder = hasDeadline && hasTime ? (explicitOffset || "3 hours before") : null;
 
       return {
         tempId: `task-${Date.now()}-${index}`,
