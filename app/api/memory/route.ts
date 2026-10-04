@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
-import { getMemories, populateMemoriesWithContext } from "@/lib/db/memories";
+import { ObjectId } from "mongodb";
+import {
+  getMemories,
+  populateMemoriesWithContext,
+  updateMemory,
+  deleteMemory,
+} from "@/lib/db/memories";
 
 export const dynamic = "force-dynamic";
 
@@ -16,5 +22,75 @@ export async function GET(request: Request) {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to retrieve memories";
     return NextResponse.json({ error: message, memories: [] }, { status: 500 });
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const body = await request.json();
+    if (!body || !body.memoryId || !ObjectId.isValid(body.memoryId)) {
+      return NextResponse.json(
+        { error: "Valid memoryId is required in request body." },
+        { status: 400 }
+      );
+    }
+
+    const { memoryId, title, content } = body;
+    if (typeof title !== "string" || !title.trim()) {
+      return NextResponse.json(
+        { error: "Title cannot be empty." },
+        { status: 400 }
+      );
+    }
+    if (typeof content !== "string" || !content.trim()) {
+      return NextResponse.json(
+        { error: "Content cannot be empty." },
+        { status: 400 }
+      );
+    }
+
+    const updated = await updateMemory(memoryId, { title, content });
+    if (!updated) {
+      return NextResponse.json({ error: "Memory not found." }, { status: 404 });
+    }
+
+    return NextResponse.json({ success: true, memory: updated });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to update memory";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    let memoryId: string | null = null;
+    const { searchParams } = new URL(request.url);
+    memoryId = searchParams.get("memoryId");
+
+    if (!memoryId) {
+      try {
+        const body = await request.json();
+        memoryId = body?.memoryId;
+      } catch {
+        // empty body
+      }
+    }
+
+    if (!memoryId || !ObjectId.isValid(memoryId)) {
+      return NextResponse.json(
+        { error: "Valid memoryId is required." },
+        { status: 400 }
+      );
+    }
+
+    const success = await deleteMemory(memoryId);
+    if (!success) {
+      return NextResponse.json({ error: "Memory not found." }, { status: 404 });
+    }
+
+    return NextResponse.json({ success: true, memoryId });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to delete memory";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

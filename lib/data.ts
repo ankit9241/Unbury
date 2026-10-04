@@ -20,6 +20,7 @@ export interface TaskConflict {
 export interface Task {
   id: string;
   title: string;
+  description?: string;
   deadline?: string | null;
   when: string;
   context?: string;

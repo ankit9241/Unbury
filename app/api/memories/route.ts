@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getGroupedMemories } from "@/lib/db/memories";
 export const dynamic = "force-dynamic";
+export { PATCH, DELETE } from "../memory/route";
 
 export async function GET() {
   try {

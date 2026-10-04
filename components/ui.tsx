@@ -1124,18 +1124,54 @@ function fetchSourceInfo(sourceId: string) {
 }
 
 export function TaskDrawer() {
-  const { tasks, memories, openId, open, toggleReminder, resolveConflict, toggleDone } = useUnbury();
+  const {
+    tasks,
+    memories,
+    openId,
+    open,
+    toggleReminder,
+    resolveConflict,
+    toggleDone,
+    updateTaskDetails,
+    deleteTask,
+  } = useUnbury();
   const task = tasks.find((item) => item.id === openId);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const [fetchedSource, setFetchedSource] = useState<{ preview?: string; type?: "Text" | "Image" | "PDF" | "Audio" } | null>(null);
+  const [fetchedSource, setFetchedSource] = useState<{
+    preview?: string;
+    type?: "Text" | "Image" | "PDF" | "Audio";
+  } | null>(null);
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editDeadline, setEditDeadline] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  useEffect(() => {
+    setIsEditing(false);
+    setShowDeleteConfirm(false);
+  }, [openId]);
 
   useEffect(() => {
     if (!task) return;
     closeButtonRef.current?.focus();
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") open(null); };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        if (showDeleteConfirm) {
+          setShowDeleteConfirm(false);
+        } else if (isEditing) {
+          setIsEditing(false);
+        } else {
+          open(null);
+        }
+      }
+    };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [task, open]);
+  }, [task, open, showDeleteConfirm, isEditing]);
 
   useEffect(() => {
     if (task?.sourceId && (!task.sourcePreview || !task.sourceType)) {
@@ -1152,128 +1188,480 @@ export function TaskDrawer() {
   const allMemories = [...memories.People, ...memories.Deadlines, ...memories.Context];
   const relatedMemories = allMemories.filter((m) => m.taskId === task.id);
 
-  const sourceType = task.sourceType || fetchedSource?.type || (task.source?.type as "Text" | "Image" | "PDF" | "Audio") || "Text";
+  const sourceType =
+    task.sourceType ||
+    fetchedSource?.type ||
+    (task.source?.type as "Text" | "Image" | "PDF" | "Audio") ||
+    "Text";
   const sourcePreview = task.sourcePreview || fetchedSource?.preview || task.source?.preview;
-  const exactEvidence = task.evidence || (task.source?.quote && task.source.quote !== "Captured from source" ? task.source.quote : undefined);
+  const exactEvidence =
+    task.evidence ||
+    (task.source?.quote && task.source.quote !== "Captured from source"
+      ? task.source.quote
+      : undefined);
+
+  const handleStartEdit = () => {
+    setEditTitle(task.title);
+    setEditDescription(
+      task.description ||
+        (task.why &&
+        !task.why.startsWith("Remembered from:") &&
+        !task.why.startsWith("Remembered by")
+          ? task.why
+          : "")
+    );
+    setEditDeadline(task.deadline || null);
+    setIsEditing(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editTitle.trim()) return;
+    setIsSaving(true);
+    try {
+      const ok = await updateTaskDetails(task.id, {
+        title: editTitle.trim(),
+        description: editDescription.trim(),
+        deadline: editDeadline,
+      });
+      if (ok) {
+        setIsEditing(false);
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDeleteTask = async () => {
+    setIsDeleting(true);
+    try {
+      const ok = await deleteTask(task.id);
+      if (ok) {
+        open(null);
+      }
+    } finally {
+      setIsDeleting(false);
+      setShowDeleteConfirm(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50">
-      <button aria-label="Close task details" onClick={() => open(null)} className="absolute inset-0 bg-foreground/15" />
-      <aside role="dialog" aria-modal="true" aria-labelledby="task-title" className="drawer-in absolute bottom-0 right-0 top-0 w-full overflow-y-auto border-l border-border bg-surface shadow-2xl md:max-w-[460px]">
+      <button
+        aria-label="Close task details"
+        onClick={() => open(null)}
+        className="absolute inset-0 bg-foreground/15"
+      />
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="task-title"
+        className="drawer-in absolute bottom-0 right-0 top-0 w-full overflow-y-auto border-l border-border bg-surface shadow-2xl md:max-w-[460px]"
+      >
         <div className="px-7 pb-10 pt-6">
-          <div className="mb-8 flex items-center justify-between"><span className="eyebrow">Task</span><button ref={closeButtonRef} onClick={() => open(null)} aria-label="Close" className="rounded p-1 text-faint hover:text-foreground"><X className="h-4 w-4" /></button></div>
-          <h2 id="task-title" className="text-2xl font-semibold leading-tight tracking-[-0.015em] break-words">{task.title}</h2>
-          <p className="mt-2 text-[15px] text-muted-foreground">{task.when}</p>
-          <div className="mt-6">{[["Status", task.status], ["Priority", task.priority]].map(([label, value]) => <div key={label} className="flex justify-between border-b border-border py-3 text-sm"><span className="text-muted-foreground">{label}</span><span className={label === "Priority" && value === "High" ? "font-medium text-primary" : "font-medium"}>{value}</span></div>)}</div>
-          {task.conflict && !task.conflict.resolved && (
-            <div className="mt-8 border-l-2 border-primary bg-primary/5 p-4">
-              <h3 className="eyebrow text-primary">Deadline conflict</h3>
-              <div className="mt-3.5 space-y-3 text-[14px]">
-                <div>
-                  <p className="text-[12px] font-medium uppercase tracking-wider text-muted-foreground">Current:</p>
-                  <p className="mt-0.5 font-medium text-foreground break-words">{task.conflict.currentDeadline || task.when}</p>
-                </div>
-                <div>
-                  <p className="text-[12px] font-medium uppercase tracking-wider text-muted-foreground">New:</p>
-                  <p className="mt-0.5 font-medium text-primary break-words">{task.conflict.newDeadline}</p>
-                </div>
-                <div>
-                  <p className="text-[12px] font-medium uppercase tracking-wider text-muted-foreground">Current evidence:</p>
-                  <blockquote className="mt-1 border-l border-border-strong pl-3 text-[13px] italic text-muted-foreground leading-relaxed break-words">
-                    &ldquo;{task.conflict.currentEvidence || task.source.quote}&rdquo;
-                  </blockquote>
-                </div>
-                <div>
-                  <p className="text-[12px] font-medium uppercase tracking-wider text-muted-foreground">New evidence:</p>
-                  <blockquote className="mt-1 border-l border-border-strong pl-3 text-[13px] italic text-muted-foreground leading-relaxed break-words">
-                    &ldquo;{task.conflict.newEvidence}&rdquo;
-                  </blockquote>
-                </div>
-              </div>
+          <div className="mb-8 flex items-center justify-between">
+            <span className="eyebrow">{isEditing ? "Edit Task" : "Task"}</span>
+            <div className="flex items-center gap-3">
+              {!isEditing && (
+                <>
+                  <button
+                    onClick={handleStartEdit}
+                    className="text-[13px] font-medium text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => setShowDeleteConfirm(true)}
+                    className="text-[13px] font-medium text-faint hover:text-primary transition-colors"
+                  >
+                    Delete
+                  </button>
+                </>
+              )}
               <button
-                type="button"
-                onClick={() => resolveConflict(task.id, task.conflict?.id)}
-                className="mt-4 inline-flex items-center rounded bg-primary px-3.5 py-1.5 text-[13px] font-medium text-white transition-opacity hover:opacity-90"
+                ref={closeButtonRef}
+                onClick={() => open(null)}
+                aria-label="Close"
+                className="rounded p-1 text-faint hover:text-foreground"
               >
-                Use new deadline
+                <X className="h-4 w-4" />
               </button>
             </div>
-          )}
-          <h3 className="eyebrow mt-10">Why Unbury remembered this</h3>
-          <p className="mt-3 text-[15px] leading-relaxed break-words">{task.why}</p>
-          {relatedMemories.length > 0 && (
-            <div className="mt-8 border-t border-border pt-6">
-              <h3 className="eyebrow mb-3">Related memory</h3>
-              <div className="space-y-3">
-                {relatedMemories.map((m) => (
-                  <div key={m.id} className="border-l border-primary/60 pl-3.5 py-1">
-                    <p className="text-[14px] font-medium text-foreground break-words">{m.title}</p>
-                    <p className="mt-0.5 text-[13px] text-muted-foreground leading-relaxed break-words">{m.detail}</p>
+          </div>
+
+          {isEditing ? (
+            <div className="space-y-6">
+              <div>
+                <label className="eyebrow text-faint mb-1.5 block">Title</label>
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="w-full bg-transparent text-xl font-semibold leading-tight tracking-[-0.015em] outline-none border-b border-border-strong focus:border-primary pb-1 transition-colors text-foreground"
+                  placeholder="Task title"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between">
+                  <label className="eyebrow text-faint mb-1.5 block">Deadline</label>
+                  {editDeadline && (
+                    <button
+                      type="button"
+                      onClick={() => setEditDeadline(null)}
+                      className="text-[12px] text-faint hover:text-foreground mb-1.5"
+                    >
+                      Clear deadline
+                    </button>
+                  )}
+                </div>
+                <p className="text-[14px] font-medium text-foreground mb-2">
+                  {editDeadline ? classifyDeadlineToBucket(editDeadline).when : "No deadline set"}
+                </p>
+
+                <div className="space-y-2 border border-border bg-background p-3">
+                  <p className="text-[11px] uppercase tracking-wider text-faint font-medium">
+                    Quick set or custom:
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setDate(d.getDate() + 1);
+                        d.setHours(17, 0, 0, 0);
+                        setEditDeadline(d.toISOString());
+                      }}
+                      className="rounded border border-border px-2.5 py-1 text-[12px] hover:border-primary text-foreground transition-colors"
+                    >
+                      Tomorrow · 5 PM
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date();
+                        const day = d.getDay();
+                        const diff = (8 - day) % 7 || 7;
+                        d.setDate(d.getDate() + diff);
+                        d.setHours(18, 0, 0, 0);
+                        setEditDeadline(d.toISOString());
+                      }}
+                      className="rounded border border-border px-2.5 py-1 text-[12px] hover:border-primary text-foreground transition-colors"
+                    >
+                      Monday · 6 PM
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setDate(d.getDate() + 1);
+                        const y = d.getFullYear();
+                        const m = String(d.getMonth() + 1).padStart(2, "0");
+                        const dayStr = String(d.getDate()).padStart(2, "0");
+                        setEditDeadline(`${y}-${m}-${dayStr}`);
+                      }}
+                      className="rounded border border-border px-2.5 py-1 text-[12px] hover:border-primary text-foreground transition-colors"
+                    >
+                      Tomorrow (Date only)
+                    </button>
+                  </div>
+                  <div className="pt-1.5 flex items-center gap-2">
+                    <input
+                      type="datetime-local"
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          setEditDeadline(e.target.value);
+                        }
+                      }}
+                      className="bg-transparent text-[13px] border border-border px-2 py-1 outline-none focus:border-primary text-foreground"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="eyebrow text-faint mb-1.5 block">Description / Notes</label>
+                <textarea
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  rows={3}
+                  className="w-full bg-transparent text-[14px] leading-relaxed border border-border p-2.5 outline-none focus:border-primary text-foreground resize-none"
+                  placeholder="Add context or notes for this task..."
+                />
+              </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="button"
+                  disabled={isSaving || !editTitle.trim()}
+                  onClick={handleSaveEdit}
+                  className="flex-1 bg-primary py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                >
+                  {isSaving ? "Saving..." : "Save changes"}
+                </button>
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => setIsEditing(false)}
+                  className="border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-surface-hover transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <h2
+                id="task-title"
+                className="text-2xl font-semibold leading-tight tracking-[-0.015em] break-words"
+              >
+                {task.title}
+              </h2>
+              <div className="mt-2 flex items-center justify-between">
+                <p className="text-[15px] text-muted-foreground">{task.when}</p>
+                <button
+                  type="button"
+                  onClick={handleStartEdit}
+                  className="text-[13px] font-medium text-primary hover:text-primary-deep transition-colors"
+                >
+                  Change deadline
+                </button>
+              </div>
+              <div className="mt-6">
+                {[
+                  ["Status", task.status],
+                  ["Priority", task.priority],
+                ].map(([label, value]) => (
+                  <div
+                    key={label}
+                    className="flex justify-between border-b border-border py-3 text-sm"
+                  >
+                    <span className="text-muted-foreground">{label}</span>
+                    <span
+                      className={
+                        label === "Priority" && value === "High"
+                          ? "font-medium text-primary"
+                          : "font-medium"
+                      }
+                    >
+                      {value}
+                    </span>
                   </div>
                 ))}
               </div>
-            </div>
-          )}
-          {task.sourceId && (
-            <div className="mt-8 border-t border-border pt-6">
-              <div className="flex items-center justify-between">
-                <h3 className="eyebrow">Source</h3>
-                <span className="rounded bg-surface-hover px-2 py-0.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground border border-border">
-                  {sourceType}
-                </span>
-              </div>
-              {sourcePreview && (
-                <div className="mt-3">
-                  <p className="text-[11px] font-medium uppercase tracking-wider text-faint">Source preview</p>
-                  <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground line-clamp-3 break-words">
-                    {sourcePreview}
-                  </p>
+              {task.conflict && !task.conflict.resolved && (
+                <div className="mt-8 border-l-2 border-primary bg-primary/5 p-4">
+                  <h3 className="eyebrow text-primary">Deadline conflict</h3>
+                  <div className="mt-3.5 space-y-3 text-[14px]">
+                    <div>
+                      <p className="text-[12px] font-medium uppercase tracking-wider text-muted-foreground">
+                        Current:
+                      </p>
+                      <p className="mt-0.5 font-medium text-foreground break-words">
+                        {task.conflict.currentDeadline || task.when}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[12px] font-medium uppercase tracking-wider text-muted-foreground">
+                        New:
+                      </p>
+                      <p className="mt-0.5 font-medium text-primary break-words">
+                        {task.conflict.newDeadline}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[12px] font-medium uppercase tracking-wider text-muted-foreground">
+                        Current evidence:
+                      </p>
+                      <blockquote className="mt-1 border-l border-border-strong pl-3 text-[13px] italic text-muted-foreground leading-relaxed break-words">
+                        &ldquo;{task.conflict.currentEvidence || task.source.quote}&rdquo;
+                      </blockquote>
+                    </div>
+                    <div>
+                      <p className="text-[12px] font-medium uppercase tracking-wider text-muted-foreground">
+                        New evidence:
+                      </p>
+                      <blockquote className="mt-1 border-l border-border-strong pl-3 text-[13px] italic text-muted-foreground leading-relaxed break-words">
+                        &ldquo;{task.conflict.newEvidence}&rdquo;
+                      </blockquote>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => resolveConflict(task.id, task.conflict?.id)}
+                    className="mt-4 inline-flex items-center rounded bg-primary px-3.5 py-1.5 text-[13px] font-medium text-white transition-opacity hover:opacity-90"
+                  >
+                    Use new deadline
+                  </button>
                 </div>
               )}
-              {exactEvidence && (
-                <div className="mt-3">
-                  <p className="text-[11px] font-medium uppercase tracking-wider text-faint">Exact evidence</p>
-                  <blockquote className="mt-1 border-l-2 border-primary/60 pl-3 text-[13px] italic text-foreground leading-relaxed break-words">
-                    &ldquo;{exactEvidence}&rdquo;
-                  </blockquote>
+              <h3 className="eyebrow mt-10">Why Unbury remembered this</h3>
+              <p className="mt-3 text-[15px] leading-relaxed break-words">
+                {task.description || task.why}
+              </p>
+              {relatedMemories.length > 0 && (
+                <div className="mt-8 border-t border-border pt-6">
+                  <h3 className="eyebrow mb-3">Related memory</h3>
+                  <div className="space-y-3">
+                    {relatedMemories.map((m) => (
+                      <div key={m.id} className="border-l border-primary/60 pl-3.5 py-1">
+                        <p className="text-[14px] font-medium text-foreground break-words">
+                          {m.title}
+                        </p>
+                        <p className="mt-0.5 text-[13px] text-muted-foreground leading-relaxed break-words">
+                          {m.detail}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
-              {task.source?.captured && (
-                <p className="mt-2.5 text-[12px] text-faint break-words">{task.source.captured}</p>
-              )}
-            </div>
-          )}
-          <h3 className="eyebrow mt-10">Reminders</h3>
-          {(!task.reminders || task.reminders.length === 0 || task.when === "No deadline") ? (
-            <p className="mt-3 text-sm text-muted-foreground">No reminder until a deadline is set.</p>
-          ) : (
-            <div className="mt-2">
-              {task.reminders.map((reminder, index) => (
-                <label key={`${reminder.label}-${index}`} className="flex cursor-pointer items-center justify-between border-b border-border py-3">
-                  <div className="flex flex-col">
-                    <span className={`text-sm ${reminder.enabled ? "" : "text-faint line-through"}`}>{reminder.label}</span>
-                    <span className="text-[11px] text-faint">
-                      {reminder.kind === "follow_up" ? "Follow-up if unfinished" : "Primary reminder"}
+              {task.sourceId && (
+                <div className="mt-8 border-t border-border pt-6">
+                  <div className="flex items-center justify-between">
+                    <h3 className="eyebrow">Source</h3>
+                    <span className="rounded bg-surface-hover px-2 py-0.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground border border-border">
+                      {sourceType}
                     </span>
                   </div>
-                  <Switch checked={reminder.enabled} onChange={() => toggleReminder(task.id, index)} />
-                </label>
-              ))}
-            </div>
+                  {sourcePreview && (
+                    <div className="mt-3">
+                      <p className="text-[11px] font-medium uppercase tracking-wider text-faint">
+                        Source preview
+                      </p>
+                      <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground line-clamp-3 break-words">
+                        {sourcePreview}
+                      </p>
+                    </div>
+                  )}
+                  {exactEvidence && (
+                    <div className="mt-3">
+                      <p className="text-[11px] font-medium uppercase tracking-wider text-faint">
+                        Exact evidence
+                      </p>
+                      <blockquote className="mt-1 border-l-2 border-primary/60 pl-3 text-[13px] italic text-foreground leading-relaxed break-words">
+                        &ldquo;{exactEvidence}&rdquo;
+                      </blockquote>
+                    </div>
+                  )}
+                  {task.source?.captured && (
+                    <p className="mt-2.5 text-[12px] text-faint break-words">
+                      {task.source.captured}
+                    </p>
+                  )}
+                </div>
+              )}
+              <h3 className="eyebrow mt-10">Reminders</h3>
+              {!task.reminders ||
+              task.reminders.length === 0 ||
+              task.when === "No deadline" ? (
+                <p className="mt-3 text-sm text-muted-foreground">
+                  No reminder until a deadline is set.
+                </p>
+              ) : (
+                <div className="mt-2">
+                  {task.reminders.map((reminder, index) => (
+                    <label
+                      key={`${reminder.label}-${index}`}
+                      className="flex cursor-pointer items-center justify-between border-b border-border py-3"
+                    >
+                      <div className="flex flex-col">
+                        <span
+                          className={`text-sm ${
+                            reminder.enabled ? "" : "text-faint line-through"
+                          }`}
+                        >
+                          {reminder.label}
+                        </span>
+                        <span className="text-[11px] text-faint">
+                          {reminder.kind === "follow_up"
+                            ? "Follow-up if unfinished"
+                            : "Primary reminder"}
+                        </span>
+                      </div>
+                      <Switch
+                        checked={reminder.enabled}
+                        onChange={() => toggleReminder(task.id, index)}
+                      />
+                    </label>
+                  ))}
+                </div>
+              )}
+              <button
+                onClick={() => toggleDone(task.id)}
+                className="mt-10 flex w-full items-center justify-center gap-2 border border-foreground py-2.5 text-sm font-medium transition-colors hover:bg-foreground hover:text-background"
+              >
+                {task.done && <Check className="h-4 w-4" />}
+                {task.done ? "Mark as not done" : "Mark as done"}
+              </button>
+
+              <div className="mt-4 flex items-center justify-between border-t border-border pt-4">
+                <button
+                  type="button"
+                  onClick={handleStartEdit}
+                  className="text-[13px] font-medium text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Edit task details
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="text-[13px] font-medium text-faint hover:text-primary transition-colors"
+                >
+                  Delete task
+                </button>
+              </div>
+            </>
           )}
-          <button onClick={() => toggleDone(task.id)} className="mt-10 flex w-full items-center justify-center gap-2 border border-foreground py-2.5 text-sm font-medium transition-colors hover:bg-foreground hover:text-background">{task.done && <Check className="h-4 w-4" />}{task.done ? "Mark as not done" : "Mark as done"}</button>
         </div>
       </aside>
+
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/20 backdrop-blur-[1px] p-4">
+          <div className="w-full max-w-[360px] border border-border bg-surface p-6 shadow-2xl space-y-4">
+            <h4 className="text-[16px] font-semibold text-foreground">Delete task?</h4>
+            <p className="text-[13px] text-muted-foreground leading-relaxed">
+              &ldquo;{task.title}&rdquo; will be deleted permanently. All pending reminders for this task will be cancelled.
+            </p>
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setShowDeleteConfirm(false)}
+                className="border border-border px-3.5 py-1.5 text-[13px] font-medium text-muted-foreground hover:bg-surface-hover transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={handleDeleteTask}
+                className="bg-primary px-3.5 py-1.5 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+              >
+                {isDeleting ? "Deleting..." : "Delete task"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-
-export function MemoryRow({ memory, onForget }: { memory: Memory; onForget: () => void }) {
-  const { tasks, open } = useUnbury();
+export function MemoryRow({ memory, onForget }: { memory: Memory; onForget?: () => void }) {
+  const { tasks, open, updateMemory, deleteMemory } = useUnbury();
   const [paused, setPaused] = useState(false);
   const [showSource, setShowSource] = useState(false);
-  const [fetchedSource, setFetchedSource] = useState<{ preview?: string; type?: "Text" | "Image" | "PDF" | "Audio" } | null>(null);
+  const [fetchedSource, setFetchedSource] = useState<{
+    preview?: string;
+    type?: "Text" | "Image" | "PDF" | "Audio";
+  } | null>(null);
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(memory.title);
+  const [editDetail, setEditDetail] = useState(memory.detail);
+  const [isSaving, setIsSaving] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const linkedTask = memory.taskId ? tasks.find((t) => t.id === memory.taskId) : null;
   const taskTitle = memory.taskTitle || linkedTask?.title;
@@ -1286,63 +1674,190 @@ export function MemoryRow({ memory, onForget }: { memory: Memory; onForget: () =
     }
   }, [showSource, memory.sourceId, memory.sourcePreview, memory.sourceType]);
 
-  const sourceType = memory.sourceType || fetchedSource?.type || (memory.source as any) || "Text";
+  const sourceType =
+    memory.sourceType || fetchedSource?.type || (memory.source as any) || "Text";
   const sourcePreview = memory.sourcePreview || fetchedSource?.preview;
+
+  const handleSave = async () => {
+    if (!editTitle.trim() || !editDetail.trim()) return;
+    setIsSaving(true);
+    try {
+      const ok = await updateMemory(memory.id, {
+        title: editTitle.trim(),
+        content: editDetail.trim(),
+      });
+      if (ok) {
+        setIsEditing(false);
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    setIsDeleting(true);
+    try {
+      const ok = await deleteMemory(memory.id);
+      if (!ok && onForget) {
+        onForget();
+      }
+    } finally {
+      setIsDeleting(false);
+      setShowDeleteConfirm(false);
+    }
+  };
 
   return (
     <div className="group border-b border-border py-4 last:border-b-0">
-      <div className="flex items-start justify-between gap-6">
-        <div className={`min-w-0 ${paused ? "opacity-50" : ""}`}>
-          <p className="text-[15px] font-medium break-words">{memory.title}</p>
-          <p className="mt-0.5 text-sm text-muted-foreground break-words">{memory.detail}</p>
-          {memory.evidence && (
-            <p className="mt-1.5 text-[13px] italic text-muted-foreground/85 border-l border-border-strong pl-2.5 break-words">
-              &ldquo;{memory.evidence}&rdquo;
-            </p>
-          )}
-          {memory.taskId && (
-            <div className="mt-2 flex items-center gap-1.5 text-[12px] text-muted-foreground">
-              <span className="text-faint">Related task:</span>
+      {isEditing ? (
+        <div className="w-full space-y-3 py-1">
+          <div>
+            <label className="eyebrow text-faint mb-1 block">Title</label>
+            <input
+              type="text"
+              value={editTitle}
+              onChange={(e) => setEditTitle(e.target.value)}
+              className="w-full bg-transparent text-[15px] font-semibold border-b border-border-strong focus:border-primary pb-1 outline-none text-foreground transition-colors"
+              placeholder="Memory title"
+            />
+          </div>
+          <div>
+            <label className="eyebrow text-faint mb-1 block">Content</label>
+            <textarea
+              value={editDetail}
+              onChange={(e) => setEditDetail(e.target.value)}
+              rows={2}
+              className="w-full bg-transparent text-sm border border-border p-2 outline-none focus:border-primary text-foreground resize-none leading-relaxed"
+              placeholder="Content or detail..."
+            />
+          </div>
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              type="button"
+              disabled={isSaving || !editTitle.trim() || !editDetail.trim()}
+              onClick={handleSave}
+              className="bg-primary px-3.5 py-1 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+            >
+              {isSaving ? "Saving..." : "Save"}
+            </button>
+            <button
+              type="button"
+              disabled={isSaving}
+              onClick={() => {
+                setIsEditing(false);
+                setEditTitle(memory.title);
+                setEditDetail(memory.detail);
+              }}
+              className="border border-border px-3 py-1 text-[12px] font-medium text-muted-foreground hover:bg-surface-hover transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="flex items-start justify-between gap-6">
+            <div className={`min-w-0 ${paused ? "opacity-50" : ""}`}>
+              <p className="text-[15px] font-medium break-words">{memory.title}</p>
+              <p className="mt-0.5 text-sm text-muted-foreground break-words">{memory.detail}</p>
+              {memory.evidence && (
+                <p className="mt-1.5 text-[13px] italic text-muted-foreground/85 border-l border-border-strong pl-2.5 break-words">
+                  &ldquo;{memory.evidence}&rdquo;
+                </p>
+              )}
+              {memory.taskId && (
+                <div className="mt-2 flex items-center gap-1.5 text-[12px] text-muted-foreground">
+                  <span className="text-faint">Related task:</span>
+                  <button
+                    type="button"
+                    onClick={() => open(memory.taskId!)}
+                    className="font-medium text-foreground underline decoration-border-strong underline-offset-2 transition-colors hover:text-primary hover:decoration-primary text-left break-words"
+                  >
+                    {taskTitle || "View task"}
+                  </button>
+                </div>
+              )}
+              <p className="mt-1.5 text-[12px] text-faint">
+                {memory.meta} · from {memory.source}
+                {paused ? " · paused" : ""}
+              </p>
+            </div>
+            <div className="flex shrink-0 gap-3 text-[12px] font-medium text-faint opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
+              {memory.sourceId ? (
+                <button
+                  onClick={() => setShowSource((current) => !current)}
+                  className="hover:text-foreground"
+                >
+                  {showSource ? "Hide source" : "Source"}
+                </button>
+              ) : null}
               <button
-                type="button"
-                onClick={() => open(memory.taskId!)}
-                className="font-medium text-foreground underline decoration-border-strong underline-offset-2 transition-colors hover:text-primary hover:decoration-primary text-left break-words"
+                onClick={() => {
+                  setIsEditing(true);
+                  setEditTitle(memory.title);
+                  setEditDetail(memory.detail);
+                }}
+                className="hover:text-foreground"
               >
-                {taskTitle || "View task"}
+                Edit
+              </button>
+              <button
+                onClick={() => setPaused((current) => !current)}
+                className="hover:text-foreground"
+              >
+                {paused ? "Resume" : "Pause"}
+              </button>
+              <button
+                onClick={() => setShowDeleteConfirm(true)}
+                className="hover:text-primary"
+              >
+                Delete
               </button>
             </div>
-          )}
-          <p className="mt-1.5 text-[12px] text-faint">{memory.meta} · from {memory.source}{paused ? " · paused" : ""}</p>
-        </div>
-        <div className="flex shrink-0 gap-3 text-[12px] font-medium text-faint opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
-          {memory.sourceId ? (
-            <button onClick={() => setShowSource((current) => !current)} className="hover:text-foreground">
-              {showSource ? "Hide source" : "Source"}
-            </button>
-          ) : null}
-          <button className="hover:text-foreground">Edit</button>
-          <button onClick={() => setPaused((current) => !current)} className="hover:text-foreground">{paused ? "Resume" : "Pause"}</button>
-          <button onClick={onForget} className="hover:text-primary">Forget</button>
-        </div>
-      </div>
-      {showSource && (
-        <div className="mt-3 border-l border-border-strong pl-3 space-y-1.5 text-[13px]">
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-medium uppercase tracking-wider text-faint">
-              Source · {sourceType}
-            </span>
           </div>
-          {sourcePreview && (
-            <p className="text-[12px] text-muted-foreground leading-relaxed break-words line-clamp-3">
-              {sourcePreview}
-            </p>
+          {showDeleteConfirm && (
+            <div className="mt-3 flex items-center justify-between border border-border bg-surface-hover/60 p-3 text-[13px]">
+              <span className="text-foreground">Delete this memory permanently?</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={handleDelete}
+                  className="bg-primary px-3 py-1 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+                >
+                  {isDeleting ? "Deleting..." : "Delete"}
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="border border-border px-2.5 py-1 text-[12px] font-medium text-muted-foreground hover:bg-surface-hover transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
           )}
-          {memory.evidence && (
-            <blockquote className="border-l border-primary/50 pl-2 text-[12px] italic text-foreground leading-relaxed break-words">
-              &ldquo;{memory.evidence}&rdquo;
-            </blockquote>
+          {showSource && (
+            <div className="mt-3 border-l border-border-strong pl-3 space-y-1.5 text-[13px]">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-medium uppercase tracking-wider text-faint">
+                  Source · {sourceType}
+                </span>
+              </div>
+              {sourcePreview && (
+                <p className="text-[12px] text-muted-foreground leading-relaxed break-words line-clamp-3">
+                  {sourcePreview}
+                </p>
+              )}
+              {memory.evidence && (
+                <blockquote className="border-l border-primary/50 pl-2 text-[12px] italic text-foreground leading-relaxed break-words">
+                  &ldquo;{memory.evidence}&rdquo;
+                </blockquote>
+              )}
+            </div>
           )}
-        </div>
+        </>
       )}
     </div>
   );

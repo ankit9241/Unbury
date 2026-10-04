@@ -166,4 +166,53 @@ export async function getGroupedMemories(): Promise<GroupedMemories> {
   return grouped;
 }
 
+export async function updateMemory(
+  memoryId: ObjectId | string,
+  updates: { title?: string; content?: string }
+): Promise<MappedMemory | null> {
+  const db = await getDb();
+  let mId: ObjectId;
+  try {
+    mId = typeof memoryId === "string" ? new ObjectId(memoryId) : memoryId;
+  } catch {
+    return null;
+  }
+
+  const setFields: Record<string, unknown> = {};
+  if (typeof updates.title === "string" && updates.title.trim()) {
+    setFields.title = updates.title.trim();
+  }
+  if (typeof updates.content === "string" && updates.content.trim()) {
+    setFields.content = updates.content.trim();
+  }
+
+  if (Object.keys(setFields).length > 0) {
+    await db.collection<MemoryDocument>("memories").updateOne(
+      { _id: mId },
+      { $set: setFields }
+    );
+  }
+
+  const doc = await db.collection<MemoryDocument>("memories").findOne({ _id: mId });
+  if (!doc) return null;
+
+  const populated = await populateMemoriesWithContext([doc]);
+  return populated[0] || null;
+}
+
+export async function deleteMemory(memoryId: ObjectId | string): Promise<boolean> {
+  const db = await getDb();
+  let mId: ObjectId;
+  try {
+    mId = typeof memoryId === "string" ? new ObjectId(memoryId) : memoryId;
+  } catch {
+    return false;
+  }
+
+  // Delete memory only. NEVER delete source or related task!
+  const res = await db.collection("memories").deleteOne({ _id: mId });
+  return res.deletedCount > 0;
+}
+
+
 

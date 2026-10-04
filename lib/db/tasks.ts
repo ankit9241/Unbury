@@ -36,6 +36,10 @@ export function formatDeadline(deadlineStr: string | null): { when: string; buck
 
 import type { ConflictDocument } from "./conflicts";
 import { type SourceDocument, normalizeSourceType, createSourceSnippet } from "./sources";
+import {
+  cancelPendingRemindersForTask,
+  updateTaskDeadlineAndReminders,
+} from "./reminders";
 
 export function mapTaskDocToTask(
   doc: TaskDocument,
@@ -85,6 +89,7 @@ export function mapTaskDocToTask(
   return {
     id: doc._id.toString(),
     title: doc.title,
+    description: doc.description || "",
     deadline: doc.deadline || null,
     when,
     context: `${sourceType} dump`,
@@ -173,3 +178,79 @@ export async function getDashboardTasks(): Promise<Task[]> {
     return [];
   }
 }
+
+export async function updateTaskDetails(
+  taskId: ObjectId | string,
+  updates: {
+    title?: string;
+    description?: string;
+    deadline?: string | null;
+    reminderOffset?: string | null;
+    status?: "not_started" | "in_progress" | "done";
+  }
+): Promise<Task | null> {
+  const db = await getDb();
+  let tId: ObjectId;
+  try {
+    tId = typeof taskId === "string" ? new ObjectId(taskId) : taskId;
+  } catch {
+    return null;
+  }
+
+  const setFields: Record<string, unknown> = { updatedAt: new Date() };
+  if (typeof updates.title === "string" && updates.title.trim()) {
+    setFields.title = updates.title.trim();
+  }
+  if (typeof updates.description === "string") {
+    setFields.description = updates.description.trim();
+  }
+  if (updates.status && ["not_started", "in_progress", "done"].includes(updates.status)) {
+    setFields.status = updates.status;
+  }
+
+  if (Object.keys(setFields).length > 1) {
+    await db.collection<TaskDocument>("tasks").updateOne({ _id: tId }, { $set: setFields });
+  }
+
+  if (updates.deadline !== undefined) {
+    await updateTaskDeadlineAndReminders(tId, updates.deadline, updates.reminderOffset);
+  }
+
+  const updatedDoc = await db.collection<TaskDocument>("tasks").findOne({ _id: tId });
+  if (!updatedDoc) return null;
+
+  const sourceDoc = updatedDoc.sourceId
+    ? await db.collection<SourceDocument>("sources").findOne({ _id: updatedDoc.sourceId })
+    : null;
+  const conflictDoc = await db.collection<ConflictDocument>("conflicts").findOne({
+    taskId: tId,
+    status: "pending",
+  });
+
+  return mapTaskDocToTask(updatedDoc, conflictDoc, sourceDoc);
+}
+
+export async function deleteTask(taskId: ObjectId | string): Promise<boolean> {
+  const db = await getDb();
+  let tId: ObjectId;
+  try {
+    tId = typeof taskId === "string" ? new ObjectId(taskId) : taskId;
+  } catch {
+    return false;
+  }
+
+  // 1. Cancel and delete all pending reminders for this task (so no orphan pending reminders remain)
+  await cancelPendingRemindersForTask(tId);
+  await db.collection("reminders").deleteMany({ taskId: tId, status: "pending" });
+
+  // 2. Unlink any memories referencing this task (preserves memory and evidence)
+  await db.collection("memories").updateMany({ taskId: tId }, { $set: { taskId: null } });
+
+  // 3. Remove any conflicts referencing this task
+  await db.collection("conflicts").deleteMany({ taskId: tId });
+
+  // 4. Delete the task
+  const result = await db.collection("tasks").deleteOne({ _id: tId });
+  return result.deletedCount > 0;
+}
+

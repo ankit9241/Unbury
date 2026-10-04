@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Dump, Task } from "./data";
 import type { GroupedMemories, MappedMemory } from "./db/memories";
+import { classifyDeadlineToBucket } from "./date";
 
 interface Store {
   tasks: Task[];
@@ -19,6 +20,18 @@ interface Store {
   addMemories: (newMemories: MappedMemory[]) => void;
   addDumpItem: (dump: Dump) => void;
   forgetMemory: (category: "People" | "Deadlines" | "Context", id: string) => void;
+  updateTaskDetails: (
+    id: string,
+    updates: {
+      title?: string;
+      description?: string;
+      deadline?: string | null;
+      reminderOffset?: string | null;
+    }
+  ) => Promise<boolean>;
+  deleteTask: (id: string) => Promise<boolean>;
+  updateMemory: (id: string, updates: { title: string; content: string }) => Promise<boolean>;
+  deleteMemory: (id: string) => Promise<boolean>;
   refreshAll: () => Promise<void>;
 }
 
@@ -168,10 +181,111 @@ export function UnburyProvider({
         });
       },
       forgetMemory: (category, id) => {
+        fetch(`/api/memory?memoryId=${id}`, { method: "DELETE" }).catch(() => {});
         setMemories((current) => ({
           ...current,
           [category]: current[category].filter((item) => item.id !== id),
         }));
+      },
+      updateTaskDetails: async (id, updates) => {
+        try {
+          const res = await fetch("/api/tasks", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ taskId: id, ...updates }),
+          });
+          if (res.ok) {
+            patchTask(id, (task) => {
+              const next: Task = { ...task };
+              if (updates.title !== undefined) next.title = updates.title;
+              if (updates.description !== undefined) {
+                next.description = updates.description;
+                if (!task.why || task.why === task.description) {
+                  next.why = updates.description;
+                }
+              }
+              if (updates.deadline !== undefined) {
+                const { when, bucket } = classifyDeadlineToBucket(updates.deadline);
+                next.deadline = updates.deadline;
+                next.when = when;
+                next.bucket = bucket;
+              }
+              return next;
+            });
+            await refreshAll();
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
+      },
+      deleteTask: async (id) => {
+        try {
+          const res = await fetch(`/api/tasks?taskId=${id}`, {
+            method: "DELETE",
+          });
+          if (res.ok) {
+            setTasks((current) => current.filter((t) => t.id !== id));
+            if (openId === id) setOpenId(null);
+            // Also unlink in local memories
+            setMemories((current) => {
+              const unlink = (m: MappedMemory) =>
+                m.taskId === id ? { ...m, taskId: null, taskTitle: null } : m;
+              return {
+                People: current.People.map(unlink),
+                Deadlines: current.Deadlines.map(unlink),
+                Context: current.Context.map(unlink),
+              };
+            });
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
+      },
+      updateMemory: async (id, updates) => {
+        try {
+          const res = await fetch("/api/memory", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ memoryId: id, title: updates.title, content: updates.content }),
+          });
+          if (res.ok) {
+            setMemories((current) => {
+              const updateItem = (m: MappedMemory) =>
+                m.id === id ? { ...m, title: updates.title, detail: updates.content } : m;
+              return {
+                People: current.People.map(updateItem),
+                Deadlines: current.Deadlines.map(updateItem),
+                Context: current.Context.map(updateItem),
+              };
+            });
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
+      },
+      deleteMemory: async (id) => {
+        try {
+          const res = await fetch(`/api/memory?memoryId=${id}`, {
+            method: "DELETE",
+          });
+          if (res.ok) {
+            setMemories((current) => ({
+              People: current.People.filter((m) => m.id !== id),
+              Deadlines: current.Deadlines.filter((m) => m.id !== id),
+              Context: current.Context.filter((m) => m.id !== id),
+            }));
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
       },
       refreshAll,
       addDump: (kind, preview) => {
