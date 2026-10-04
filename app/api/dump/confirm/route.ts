@@ -16,7 +16,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(result);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to confirm proposal";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("Proposal confirm error:", err instanceof Error ? err.name : "Unknown error");
+    return NextResponse.json({ error: "Failed to confirm proposal. Please try again." }, { status: 500 });
   }
 }

@@ -21,8 +21,8 @@ export async function GET() {
       })),
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to fetch conflicts";
-    return NextResponse.json({ error: message, conflicts: [] }, { status: 500 });
+    console.error("Conflicts retrieval error:", err instanceof Error ? err.name : "Unknown error");
+    return NextResponse.json({ error: "Failed to fetch conflicts.", conflicts: [] }, { status: 500 });
   }
 }
 
@@ -59,7 +59,7 @@ export async function PATCH(request: Request) {
       },
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to resolve conflict";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("Conflict resolve error:", err instanceof Error ? err.name : "Unknown error");
+    return NextResponse.json({ error: "Failed to resolve conflict. Please try again." }, { status: 500 });
   }
 }

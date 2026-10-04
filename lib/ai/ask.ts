@@ -4,6 +4,7 @@ import { getDb } from "../mongodb";
 import type { TaskDocument } from "../db/tasks";
 import type { MemoryDocument } from "../db/memories";
 import type { SourceDocument } from "../db/sources";
+import { callChatCompletion } from "./provider";
 
 export interface RetrievedEvidence {
   type: "task" | "memory" | "source";
@@ -269,48 +270,22 @@ Rules:
 
   const userPrompt = `Question: "${trimmed}"\n\n${contextBlock}`;
 
-  const baseUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-  const model = process.env.OLLAMA_MODEL || "gemma3";
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000);
-
   let rawContent = "";
   try {
-    const response = await fetch(`${baseUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        stream: false,
-        format: askJsonFormat,
-        options: {
-          temperature: 0.1,
-        },
-      }),
-      signal: controller.signal,
+    rawContent = await callChatCompletion({
+      systemPrompt,
+      userPrompt,
+      jsonFormat: askJsonFormat,
+      temperature: 0.1,
+      timeoutMs: 60000,
     });
-
-    if (!response.ok) {
-      throw new Error(`Ollama returned status ${response.status}`);
-    }
-
-    const data = await response.json();
-    rawContent = data?.message?.content || "";
   } catch (err: unknown) {
-    clearTimeout(timeoutId);
-    console.error("Ask Ollama fetch error:", err);
-    // If Ollama is unreachable, return grounded fallback
+    console.error("Ask query error:", err instanceof Error ? err.name : "Unknown error");
+    // If AI service is unreachable or errors, return grounded fallback
     return {
-      answer: "I couldn't query memory right now. Please ensure Ollama is running.",
+      answer: "I couldn't query memory right now. Please try again later.",
       evidence: [],
     };
-  } finally {
-    clearTimeout(timeoutId);
   }
 
   try {

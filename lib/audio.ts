@@ -39,9 +39,30 @@ export async function transcribeAudio(
     }
 
     // 2. Run local Python transcription script
-    const { stdout, stderr } = await execFileAsync("python", [scriptPath, outputPath], {
-      timeout: 30000,
-    });
+    const pythonBins = process.platform === "win32" ? ["python", "py"] : ["python3", "python"];
+    let stdout = "";
+    let lastError: unknown = null;
+
+    for (const bin of pythonBins) {
+      try {
+        const res = await execFileAsync(bin, [scriptPath, outputPath], {
+          timeout: 30000,
+        });
+        stdout = res.stdout;
+        lastError = null;
+        break;
+      } catch (err: unknown) {
+        lastError = err;
+        if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "ENOENT") {
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    if (lastError) {
+      throw lastError;
+    }
 
     const transcript = (stdout || "").trim();
     if (!transcript) {

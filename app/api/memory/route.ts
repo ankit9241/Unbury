@@ -20,8 +20,8 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ memories });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to retrieve memories";
-    return NextResponse.json({ error: message, memories: [] }, { status: 500 });
+    console.error("Memories retrieval error:", err instanceof Error ? err.name : "Unknown error");
+    return NextResponse.json({ error: "Failed to retrieve memories.", memories: [] }, { status: 500 });
   }
 }
 
@@ -56,8 +56,8 @@ export async function PATCH(request: Request) {
 
     return NextResponse.json({ success: true, memory: updated });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to update memory";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("Memory update error:", err instanceof Error ? err.name : "Unknown error");
+    return NextResponse.json({ error: "Failed to update memory. Please try again." }, { status: 500 });
   }
 }
 
@@ -90,7 +90,7 @@ export async function DELETE(request: Request) {
 
     return NextResponse.json({ success: true, memoryId });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to delete memory";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("Memory delete error:", err instanceof Error ? err.name : "Unknown error");
+    return NextResponse.json({ error: "Failed to delete memory. Please try again." }, { status: 500 });
   }
 }

@@ -1,5 +1,6 @@
 import { extractionSchema, type ExtractionResult, type ExtractedTask, type ExtractedMemory } from "./extraction-schema";
 import { getCurrentDateContext, getCalendarReference, getAppReferenceDate } from "../date";
+import { callChatCompletion, AIProviderError } from "./provider";
 
 export class ExtractionError extends Error {
   public readonly originalError?: unknown;
@@ -330,10 +331,12 @@ function sanitizeAndValidateResult(
       continue;
     }
 
-    // Reject synthetic reply/confirmation tasks where action was not explicitly requested in text
-    const isSyntheticReply = /^(send\s+.*confirmation|confirm\s+|reply(\s+to)?\s+|acknowledge\s+|respond(\s+to)?\s+)/i.test(rawTitle);
-    if (isSyntheticReply) {
-      const explicitActionInText = /\b(confirm|confirmation|reply|respond|response|acknowledg(e|ment))\b/i.test(evidence) || /\b(confirm|confirmation|reply|respond|response|acknowledg(e|ment))\b/i.test(normalizedContent);
+    // Reject synthetic call/message/reply/confirmation tasks where action was not explicitly requested in text
+    const isSyntheticCommunication = /^(call(\s+up)?\b|message\b|send\s+(a\s+)?message(\s+to)?\b|reply(\s+to)?\s+|respond(\s+to)?\s+|confirm\s+|send\s+.*confirmation|acknowledge\s+)/i.test(rawTitle);
+    if (isSyntheticCommunication) {
+      const explicitActionInText =
+        /\b(call|calling|phone|message|messaging|text|texting|reply|replying|respond|response|confirm|confirmation|acknowledg)\b/i.test(evidence) ||
+        /\b(call|calling|phone|message|messaging|text|texting|reply|replying|respond|response|confirm|confirmation|acknowledg)\b/i.test(normalizedContent);
       if (!explicitActionInText) {
         continue;
       }
@@ -402,6 +405,15 @@ function sanitizeAndValidateResult(
       /^[A-Z][a-z]+:\s*(?:no,?\s*)?(?:i\s+(?:have\s+to|need\s+to|am\s+going\s+to|will|must)\b|i'?m\s+(?:going\s+to|busy|heading))\b/i.test(evidence.trim()) ||
       /^[A-Z][a-z]+:\s*(?:no,?\s*)?(?:i\s+(?:have\s+to|need\s+to|am\s+going\s+to|will|must)\b|i'?m\s+(?:going\s+to|busy|heading))\b/i.test(rawTitle.trim());
     if (isOtherSpeakerPersonalStatement) {
+      continue;
+    }
+
+    // Reject purely conditional / hypothetical offers or contingencies without a concrete commitment
+    // (e.g. "... if needed", "... if necessary", "... if required", "... as needed")
+    const isConditionalContingency =
+      /\b(?:if\s+needed|if\s+necessary|if\s+required|if\s+applicable|as\s+needed)\b/i.test(rawTitle) ||
+      (/\b(?:if\s+needed|if\s+necessary|if\s+required|if\s+applicable|as\s+needed)\b/i.test(evidence) && !deadline);
+    if (isConditionalContingency) {
       continue;
     }
 
@@ -876,8 +888,6 @@ const extractionJsonSchema = {
 };
 
 export async function extractFromText(content: string): Promise<ExtractionResult> {
-  const baseUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-  const model = process.env.OLLAMA_MODEL || "gemma3";
   const dateCtx = getCurrentDateContext();
   const calendarRef = getCalendarReference();
 
@@ -904,6 +914,7 @@ Strict Rules:
      * Informational or status updates, travel updates, facts about something that already happened (e.g., "flight landed in Delhi on October 2nd", "weather is nice", "I reached safely"). Return "tasks": [].
      * Announcements or past events.
      * An implied need to reply, confirm, acknowledge, or respond.
+     * Conditional or hypothetical offers, fallback remarks, or contingencies (e.g. if needed, if necessary, if required, as needed). These are tentative possibilities, NOT committed tasks. Return tasks: [].
    - CRITICAL RESTRICTIONS:
      * NEVER turn an informational statement into "reply", "confirm", "send confirmation", "acknowledge", etc. unless the source text explicitly asks to confirm or reply.
      * NEVER turn casual future social language into a task unless there is a concrete actionable plan/request.
@@ -1010,50 +1021,21 @@ Strict Rules:
 
   const userPrompt = `Input text to extract:\n"${content}"`;
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 120000);
-
-  let response: Response;
-  try {
-    response = await fetch(`${baseUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        stream: false,
-        format: extractionJsonSchema,
-        options: {
-          temperature: 0.1,
-          num_predict: 2048,
-        },
-      }),
-      signal: controller.signal,
-    });
-  } catch (err: unknown) {
-    clearTimeout(timeoutId);
-    if (err instanceof Error && err.name === "AbortError") {
-      throw new ExtractionError("AI request timed out. Please try again.");
-    }
-    throw new ExtractionError("Could not reach Ollama AI service. Please ensure Ollama is running.", err);
-  } finally {
-    clearTimeout(timeoutId);
-  }
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new ExtractionError(`AI service returned error (${response.status}): ${errorText}`);
-  }
-
   let rawContent = "";
   try {
-    const result = await response.json();
-    rawContent = result?.message?.content || "";
+    rawContent = await callChatCompletion({
+      systemPrompt,
+      userPrompt,
+      jsonFormat: extractionJsonSchema,
+      temperature: 0.1,
+      numPredict: 2048,
+      timeoutMs: 120000,
+    });
   } catch (err: unknown) {
-    throw new ExtractionError("Failed to parse AI service response.", err);
+    if (err instanceof AIProviderError) {
+      throw new ExtractionError(err.message, err.cause);
+    }
+    throw new ExtractionError("Could not reach AI service. Please ensure the model server is available.", err);
   }
 
   const cleaned = cleanJsonResponse(rawContent);

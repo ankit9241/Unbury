@@ -51,8 +51,8 @@ export async function PATCH(request: Request) {
 
     return NextResponse.json({ success: true, task: updatedTask });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to update task";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("Task update error:", err instanceof Error ? err.name : "Unknown error");
+    return NextResponse.json({ error: "Failed to update task. Please try again." }, { status: 500 });
   }
 }
 
@@ -85,7 +85,7 @@ export async function DELETE(request: Request) {
 
     return NextResponse.json({ success: true, taskId });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to delete task";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("Task delete error:", err instanceof Error ? err.name : "Unknown error");
+    return NextResponse.json({ error: "Failed to delete task. Please try again." }, { status: 500 });
   }
 }

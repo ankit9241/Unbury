@@ -8,8 +8,8 @@ export async function GET() {
     const reminders = await getDuePendingReminders();
     return NextResponse.json({ reminders });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to fetch due reminders";
-    return NextResponse.json({ error: message, reminders: [] }, { status: 500 });
+    console.error("Reminders retrieval error:", err instanceof Error ? err.name : "Unknown error");
+    return NextResponse.json({ error: "Failed to fetch due reminders.", reminders: [] }, { status: 500 });
   }
 }
 
@@ -23,7 +23,7 @@ export async function PATCH(request: Request) {
     const updated = await markReminderAsSent(body.reminderId);
     return NextResponse.json({ success: true, updated });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to update reminder";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("Reminder update error:", err instanceof Error ? err.name : "Unknown error");
+    return NextResponse.json({ error: "Failed to update reminder. Please try again." }, { status: 500 });
   }
 }

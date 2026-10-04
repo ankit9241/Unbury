@@ -9,7 +9,8 @@ __pycache__/
 *.pyc
 *.tsbuildinfo
 .DS_Store
-scripts/
+scripts/verify_*.ts
 scratch/
+scratch_*.ts
 *.report
 test_*.*

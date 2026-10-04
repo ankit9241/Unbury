@@ -32,7 +32,10 @@ export async function POST(request: Request) {
     const result = await askUnbury(question);
     return NextResponse.json(result);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to process question";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("Ask endpoint error:", err instanceof Error ? err.name : "Unknown error");
+    return NextResponse.json(
+      { error: "Failed to process question. Please try again." },
+      { status: 500 }
+    );
   }
 }

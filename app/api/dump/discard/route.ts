@@ -9,7 +9,7 @@ export async function POST(request: Request) {
     }
     return NextResponse.json({ success: true });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to discard proposal";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("Proposal discard error:", err instanceof Error ? err.name : "Unknown error");
+    return NextResponse.json({ error: "Failed to discard proposal. Please try again." }, { status: 500 });
   }
 }
