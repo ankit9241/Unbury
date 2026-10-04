@@ -1,0 +1,15 @@
+node_modules/
+.next/
+out/
+.env*
+!.env.example
+*.log
+*.traineddata
+__pycache__/
+*.pyc
+*.tsbuildinfo
+.DS_Store
+scripts/
+scratch/
+*.report
+test_*.*
