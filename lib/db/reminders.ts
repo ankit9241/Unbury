@@ -25,8 +25,8 @@ export function parseDeadlineDate(deadlineStr: string | null): Date | null {
     return new Date(`${trimmed}T09:00:00+05:30`);
   }
 
-  // Handle "YYYY-MM-DD HH:mm" or "YYYY-MM-DD HH:mm:ss" without T/timezone
-  const spaceTimeMatch = /^(\d{4}-\d{2}-\d{2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(trimmed);
+  // Handle "YYYY-MM-DD HH:mm", "YYYY-MM-DDTHH:mm", or seconds without timezone
+  const spaceTimeMatch = /^(\d{4}-\d{2}-\d{2})[T\s](\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(trimmed);
   if (spaceTimeMatch) {
     const [, d, h, m, s = "00"] = spaceTimeMatch;
     return new Date(`${d}T${h.padStart(2, "0")}:${m.padStart(2, "0")}:${s.padStart(2, "0")}+05:30`);

@@ -1,9 +1,12 @@
 export const APP_TIMEZONE = process.env.APP_TIMEZONE || "Asia/Kolkata";
-export const APP_REFERENCE_DATE = (typeof process !== "undefined" && process.env?.APP_REFERENCE_DATE) || "2026-10-02";
+export const APP_REFERENCE_DATE = (typeof process !== "undefined" && process.env?.APP_REFERENCE_DATE) || null;
 
 export function getAppReferenceDate(): Date {
-  const refStr = (typeof process !== "undefined" && process.env?.APP_REFERENCE_DATE) || "2026-10-02";
-  return new Date(`${refStr}T12:00:00+05:30`);
+  const refStr = (typeof process !== "undefined" && process.env?.APP_REFERENCE_DATE) || null;
+  if (refStr) {
+    return new Date(`${refStr}T12:00:00+05:30`);
+  }
+  return new Date();
 }
 
 export function getCurrentDateContext(timezone: string = APP_TIMEZONE) {
