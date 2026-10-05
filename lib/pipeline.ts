@@ -119,18 +119,46 @@ export async function processDump(options: ProcessDumpOptions): Promise<ProcessD
       let explicitOffset = parseReminderOffset(t.evidence);
       if (!explicitOffset && extraction.tasks.length === 1) {
         explicitOffset = parseReminderOffset(content);
-      } else if (!explicitOffset) {
-        const sentences = content.split(/[.?!;\n]+/).map((s) => s.trim()).filter(Boolean);
-        const evLower = t.evidence.toLowerCase();
-        const sentenceIdx = sentences.findIndex((s) => s.toLowerCase().includes(evLower) || evLower.includes(s.toLowerCase()));
+      }
+      if (!explicitOffset) {
+        explicitOffset = parseReminderOffset(t.description) || parseReminderOffset(t.title);
+      }
+      if (!explicitOffset) {
+        // Protect a.m./p.m. before splitting so clock times don't split sentences
+        const normalizedContent = content.replace(/\b([ap])\.m\./gi, "$1m");
+        const sentences = normalizedContent.split(/(?<=[.?!;\n])\s+/).map((s) => s.trim()).filter(Boolean);
+        const evNorm = t.evidence.toLowerCase().replace(/\b([ap])\.m\./gi, "$1m");
+        const titleNorm = t.title.toLowerCase();
+        const sentenceIdx = sentences.findIndex(
+          (s) => {
+            const sLower = s.toLowerCase();
+            return (
+              (evNorm && (sLower.includes(evNorm) || evNorm.includes(sLower))) ||
+              (titleNorm && sLower.includes(titleNorm))
+            );
+          }
+        );
         if (sentenceIdx !== -1) {
           explicitOffset =
             parseReminderOffset(sentences[sentenceIdx]) ||
-            (sentenceIdx + 1 < sentences.length ? parseReminderOffset(sentences[sentenceIdx + 1]) : null);
+            (sentenceIdx + 1 < sentences.length ? parseReminderOffset(sentences[sentenceIdx + 1]) : null) ||
+            (sentenceIdx - 1 >= 0 ? parseReminderOffset(sentences[sentenceIdx - 1]) : null);
         }
       }
 
-      const suggestedReminder = hasDeadline && hasTime ? (explicitOffset || "3 hours before") : null;
+      let suggestedReminder: string | null = null;
+      let remindersEnabled = false;
+
+      if (explicitOffset) {
+        suggestedReminder = explicitOffset;
+        remindersEnabled = true;
+      } else if (hasDeadline && hasTime) {
+        suggestedReminder = "3 hours before";
+        remindersEnabled = true;
+      } else {
+        suggestedReminder = null;
+        remindersEnabled = false;
+      }
 
       return {
         tempId: `task-${Date.now()}-${index}`,
@@ -143,7 +171,7 @@ export async function processDump(options: ProcessDumpOptions): Promise<ProcessD
         evidence: t.evidence,
         suggestedReminder,
         reminder: suggestedReminder,
-        remindersEnabled: hasDeadline && hasTime,
+        remindersEnabled,
       };
     });
 

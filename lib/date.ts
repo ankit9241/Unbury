@@ -74,57 +74,85 @@ export function deadlineHasTime(deadlineStr: string | null | undefined): boolean
   return false;
 }
 
+const REMINDER_WORD_TO_NUM: Record<string, number> = {
+  a: 1,
+  an: 1,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  fifteen: 15,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  "forty-five": 45,
+  "forty five": 45,
+  fifty: 50,
+};
+
 /**
  * Parses explicit reminder offset expressions from text.
- * e.g.:
- * - "remind me 15 minutes before" -> "15 minutes before"
- * - "remind me 1 hour before" -> "1 hour before"
- * - "remind me a day before" -> "1 day before"
- * - "remind me 3 hours before" -> "3 hours before"
+ * Handles natural variations, including:
+ * - 15 minutes before / 30 mins before / 45 minutes before
+ * - half an hour before / an hour before / 1 hour before / 2 hours before / 3 hours before / 6 hours before / 12 hours before
+ * - 1 day before / 2 days before / 3 days before
+ * - "remind me 30 minutes before" / "30 min before deadline" / "30 minutes before the deadline"
+ * - "30 min reminder" / "set a 1 hour reminder"
  * Returns null if no explicit reminder offset is specified.
  */
 export function parseReminderOffset(text: string | null | undefined): string | null {
   if (!text) return null;
-  const lower = text.toLowerCase();
+  const lower = text.toLowerCase().trim();
 
-  // 15 minutes before / 15 mins before / 15 min before
+  // 1. "half an hour" / "half hour" expressions
   if (
-    /\b(?:remind\s+(?:me\s+)?(?:about\s+it\s+)?)?(?:15|fifteen)\s*(?:minutes?|mins?|m)\s+(?:before|prior|earlier|ahead)\b/i.test(lower) ||
-    /\b(?:15|fifteen)\s*(?:minutes?|mins?|m)\s+reminder\b/i.test(lower)
+    /\b(?:remind\s+(?:me\s+)?(?:about\s+it\s+)?)?half\s+(?:an?\s+)?hour\s+(?:before|prior(?:\s+to)?|ahead(?:\s+of)?|earlier|in\s+advance)\b/i.test(lower) ||
+    /\bhalf\s+(?:an?\s+)?hour\s+reminder\b/i.test(lower)
   ) {
-    return "15 minutes before";
+    return "30 minutes before";
   }
 
-  // 1 hour before / an hour before
-  if (
-    /\b(?:remind\s+(?:me\s+)?(?:about\s+it\s+)?)?(?:1|one|an?)\s*(?:hour|hr)s?\s+(?:before|prior|earlier|ahead)\b/i.test(lower) ||
-    /\b(?:1|one|an?)\s*(?:hour|hr)\s+reminder\b/i.test(lower)
-  ) {
-    return "1 hour before";
+  // 2. Pattern A: "[remind me] <num/word> <unit> before/prior/ahead/earlier/in advance"
+  const beforePattern =
+    /\b(?:remind\s+(?:me\s+)?(?:about\s+it\s+)?(?:to\s+[a-z\s]+)?)?(\d+|[a-z]+(?:-[a-z]+)?)\s*(minutes?|mins?|min|hours?|hrs?|hr|days?)\s+(?:before|prior(?:\s+to)?|ahead(?:\s+of)?|earlier|in\s+advance)(?:\s+(?:the\s+)?(?:deadline|due\s+date|it|then))?\b/i;
+
+  // 3. Pattern B: "<num/word> <unit> reminder"
+  const reminderPattern =
+    /\b(?:set\s+(?:a\s+)?|send\s+(?:a\s+)?|with\s+(?:a\s+)?)?(\d+|[a-z]+(?:-[a-z]+)?)\s*(minutes?|mins?|min|hours?|hrs?|hr|days?)\s+reminder\b/i;
+
+  let match = beforePattern.exec(lower);
+  if (!match) {
+    match = reminderPattern.exec(lower);
   }
 
-  // 3 hours before
-  if (
-    /\b(?:remind\s+(?:me\s+)?(?:about\s+it\s+)?)?(?:3|three)\s*(?:hours|hrs)\s+(?:before|prior|earlier|ahead)\b/i.test(lower) ||
-    /\b(?:3|three)\s*(?:hours|hrs)\s+reminder\b/i.test(lower)
-  ) {
-    return "3 hours before";
-  }
+  if (match) {
+    const rawNum = match[1].toLowerCase();
+    const rawUnit = match[2].toLowerCase();
 
-  // 1 day before / a day before
-  if (
-    /\b(?:remind\s+(?:me\s+)?(?:about\s+it\s+)?)?(?:1|one|a)\s*day\s+(?:before|prior|earlier|ahead)\b/i.test(lower) ||
-    /\b(?:1|one|a)\s*day\s+reminder\b/i.test(lower)
-  ) {
-    return "1 day before";
-  }
+    let num: number | undefined;
+    if (/^\d+$/.test(rawNum)) {
+      num = parseInt(rawNum, 10);
+    } else if (REMINDER_WORD_TO_NUM[rawNum] !== undefined) {
+      num = REMINDER_WORD_TO_NUM[rawNum];
+    }
 
-  // 3 days before
-  if (
-    /\b(?:remind\s+(?:me\s+)?(?:about\s+it\s+)?)?(?:3|three)\s*days?\s+(?:before|prior|earlier|ahead)\b/i.test(lower) ||
-    /\b(?:3|three)\s*days?\s+reminder\b/i.test(lower)
-  ) {
-    return "3 days before";
+    if (num !== undefined && num > 0) {
+      if (/^m/i.test(rawUnit)) {
+        return `${num} minute${num === 1 ? "" : "s"} before`;
+      } else if (/^h/i.test(rawUnit)) {
+        return `${num} hour${num === 1 ? "" : "s"} before`;
+      } else if (/^d/i.test(rawUnit)) {
+        return `${num} day${num === 1 ? "" : "s"} before`;
+      }
+    }
   }
 
   return null;

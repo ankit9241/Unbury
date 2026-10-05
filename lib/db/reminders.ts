@@ -50,7 +50,17 @@ export function calculateScheduledFor(
   const lower = offsetStr.toLowerCase();
   let offsetMs = 0;
 
-  if (lower.includes("15 min")) {
+  const minMatch = /(\d+)\s*(?:min|minute)s?/i.exec(lower);
+  const hourMatch = /(\d+)\s*(?:hour|hr)s?/i.exec(lower);
+  const dayMatch = /(\d+)\s*days?/i.exec(lower);
+
+  if (minMatch) {
+    offsetMs = parseInt(minMatch[1], 10) * 60 * 1000;
+  } else if (hourMatch) {
+    offsetMs = parseInt(hourMatch[1], 10) * 60 * 60 * 1000;
+  } else if (dayMatch) {
+    offsetMs = parseInt(dayMatch[1], 10) * 24 * 60 * 60 * 1000;
+  } else if (lower.includes("15 min")) {
     offsetMs = 15 * 60 * 1000;
   } else if (lower.includes("1 hour") || lower.includes("1 hr")) {
     offsetMs = 60 * 60 * 1000;
